@@ -2,14 +2,13 @@ import functools
 import json
 from socket import SocketType
 import subprocess
-import sys
-from tempfile import TemporaryFile
 from time import sleep, time
 from typing import List, Set, Tuple
-from os import cpu_count, path, remove
+from os import cpu_count, path, rename
 from _thread import start_new_thread
 import bpy
 from bpy.types import Operator, Context, Object
+from tempfile import gettempdir
 
 from .server import JFractureServer, SocketSignal
 
@@ -19,6 +18,13 @@ MODULE_PATH = path.dirname(path.abspath(__file__))
 SCRIPT_PATH = path.join(MODULE_PATH, 'script.py')
 SETTINGS_PATH = path.join(MODULE_PATH, 'settings.json')
 BLEND_PATH = path.join(MODULE_PATH, 'empty.blend')
+TMP_DIR = gettempdir()
+COPYBUFFER_PATH = path.join(TMP_DIR, 'coppybuffer.blend')
+
+
+def split(a, n):
+    k, m = divmod(len(a), n)
+    return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
 
 
 def get_layer_coll(layer_coll, collection):
@@ -50,50 +56,27 @@ class JFRACTURE_OT_cell_fracture(Operator):
         # Deselect objects.
         for ob in self.objects:
             ob.select_set(False)
-        self.iter_objects = iter(self.objects)
-        self.iter_index = 0
 
-        # Start server.
-        connection_count: int = min(CPU_COUNT, len(self.objects))
-        self.server = JFractureServer(connection_count)
-        self.server.start()
-        self.current_connection_count: int = 0
-        self.max_connections = connection_count
-
-        # Start clients.
-        self.timer_func = functools.partial(self.start_clients, self.server)
-        bpy.app.timers.register(self.timer_func)
+        # Resolve objects per instance.
+        ob_count: int = len(self.objects)
+        instances_count: int = min(CPU_COUNT, ob_count)
+        self.instances_count = instances_count
+        if instances_count == ob_count:
+            self.instance_objects = [[ob] for ob in self.objects]
+        else:
+            # ob_count > instances_count
+            self.instance_objects: List[List[Object]] = split(self.objects, instances_count)
 
         # Inter-Client properties.
-        self.prev_instance_is_ready: bool = True
-        self.waiting_instance: int = -1
-        self.finished_instances_count: int = 0
-        self.finished = [False] * len(self.objects)
-        self.ready = [False] * len(self.objects)
-
+        self.finished = [False] * instances_count
         self.request_queue = []
 
+        # Start server.
+        self.server = JFractureServer(instances_count)
+        self.server.start()
 
-    def start_clients(self, server: 'JFractureServer'):
-        #idx = 0
-        if self.current_connection_count >= self.max_connections:
-            return None
-        if self.iter_index >= len(self.objects):
-            return None
-        if not self.prev_instance_is_ready:
-            return 0.2
-        self.start_instance(bpy.context)
-        try:
-            client, address = server.new_connection()
-        except Exception as e:
-            print(e)
-            return None
-        print('[Server] Connected to: ' + address[0] + ':' + str(address[1]))
-        start_new_thread(self.client_handler, (client, )) #idx
-        #idx += 1
-        self.current_connection_count += 1
-        self.prev_instance_is_ready = False
-        return 0.1
+        # Export objects:
+        self.export_objects(context)
 
 
     def error(self, msg: str) -> None:
@@ -107,10 +90,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
         if self.timer:
             context.window_manager.event_timer_remove(self.timer)
             self.timer = None
-
-        if bpy.app.timers.is_registered(self.timer_func):
-            bpy.app.timers.unregister(self.timer_func)
-            del self.timer_func
 
         tot_time = time() - self.start_time
         time_msg = "Total Time: %.2f" % (tot_time)
@@ -150,51 +129,20 @@ class JFRACTURE_OT_cell_fracture(Operator):
         # the different threads that hold the connections with the clients.
         while self.request_queue != []:
             client_id, request, client = self.request_queue.pop(0)
-            if request == SocketSignal.REQUEST_SEND:
-                if self.waiting_instance != -1:
-                    # Already waiting for an instance to finish.
-                    print("[Server] Instance { %i } requested to send but Waiting for instance { %i } to finish..." % (client_id, self.waiting_instance))
-                    self.server.send_signal(client, SocketSignal.WAIT)
-                    continue
-                print("[Server] Instance { %i } requested to send, the request is granted!" % client_id)
-                self.waiting_instance = client_id
-                self.server.send_signal(client, SocketSignal.CONTINUE)
-                return {'RUNNING_MODAL'}
-
-            elif request == SocketSignal.FINISHED:
-                if self.waiting_instance != client_id:
-                    print("[Server] WTF this client want to finish but it should not finish nor continue!!!", client_id)
-                print("[Server] Instance { %i } just finished!" % client_id)
+            if request == SocketSignal.FINISHED:
+                print("[Server] Client-%i just finished!" % client_id)
                 self.finished[client_id] = True
-
-        if self.finished.count(True) == self.finished_instances_count:
-            return {'RUNNING_MODAL'}
-
-        self.finished_instances_count = self.finished.count(True)
-
-        index = self.waiting_instance
-        fractured_ob: Object = self.objects[index]
-
-        # Create collection for object.
-        coll_name: str = fractured_ob.name + '_low'
-        collection = bpy.data.collections.new(coll_name)
-
-        # Link new collection top scene collection.
-        context.scene.collection.children.link(collection)
-
-        # Get layer collection from new collection.
-        # Set as active.
-        act_layer_coll = context.view_layer.layer_collection
-        target_layer_coll = get_layer_coll(act_layer_coll, collection)
-        context.view_layer.active_layer_collection = target_layer_coll
-
-        # Paste back from clipboard buffer.
-        bpy.ops.view3d.pastebuffer(False, active_collection=True, autoselect=False)
-
-        print("[Server] Info! Object { %s } was successfully fractured into %i chunks! (by Client-%i)" % (fractured_ob.name, len(context.selected_objects), index))
-
-        self.waiting_instance = -1 # RESET.
-        self.current_connection_count -= 1
+                lib_path = path.join(TMP_DIR, 'pastebuffer' + str(client_id) + '.blend')
+                # Load output fracture collections from client output.
+                with bpy.data.libraries.load(lib_path) as (data_from, data_to):
+                    data_to.collections = data_from.collections
+                link_coll = context.scene.collection.children.link
+                for collection in data_to.collections:
+                    if collection is not None:
+                        link_coll(collection)
+                print("[Server] Chunks generated by Client-%i were loaded successfully!" % client_id)
+            else:
+                print("Woot!?")
 
         if all(self.finished):
             print("[Server] DONE!")
@@ -214,44 +162,8 @@ class JFRACTURE_OT_cell_fracture(Operator):
                         continue
 
                     instance_id, signal = data
-                    index = instance_id
-
                     print(f"[Server] Received signal {signal} from instance {instance_id}")
 
-                    if signal == SocketSignal.STARTED:
-                        self.ready[index] = True
-                        self.prev_instance_is_ready = True
-                        continue
-
-                    if not all(self.ready):
-                        # If not all instances are ready... break.
-                        if signal == SocketSignal.REQUEST_SEND:
-                            # Just in case, some fast guy want to make some trouble.
-                            self.server.send_signal(client, SocketSignal.WAIT)
-                        sleep(0.1)
-                        continue
-
-                    """
-                    if signal == SocketSignal.REQUEST_SEND:
-                        # Nice but unsafe.
-                        if self.waiting_instance != -1:
-                            # Already waiting for an instance to finish.
-                            #print("Waiting...")
-                            print("[Server] Instance { %i } requested to send but Waiting for instance { %i } to finish..." % (instance_id, self.waiting_instance))
-                            self.server.send_signal(client, SocketSignal.WAIT)
-                            continue
-                        print("[Server] Instance { %i } requested to send, the request is granted!" % instance_id)
-                        self.waiting_instance = instance_id
-                        self.server.send_signal(client, SocketSignal.CONTINUE)
-
-                    elif signal == SocketSignal.FINISHED:
-                        print("[Server] Instance { %i } just finished!" % instance_id)
-                        self.finished[index] = True
-
-                        # Disconnect client.
-                        #client.close() # automatic with "with client"
-                        break
-                    """
                     # Safe method.
                     self.request_queue.append((instance_id, signal, client))
                     sleep(0.1)
@@ -261,22 +173,8 @@ class JFRACTURE_OT_cell_fracture(Operator):
                     print(e)
                     break
 
-    def start_instance(self, context) -> None:
-        try:
-            ob = next(self.iter_objects)
-        except StopIteration:
-            print("[Server] Info! No more objects to fracture left...")
-            return
 
-        #print(ob)
-
-        # Select/Set Active object.
-        context.view_layer.objects.active = ob
-        ob.select_set(True)
-
-        # Copy object to clipboard buffer.
-        bpy.ops.view3d.copybuffer(False)
-
+    def start_instance(self, objects: List[Object], instance_id: str) -> None:
         # Start instance.
         process = subprocess.Popen(
             [
@@ -287,18 +185,32 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 SCRIPT_PATH,
                 '--', # Blender is silly and stops with this.
                 # Now the arguments...
-                str(self.iter_index), # ID.
                 str(self.server.port),
-                #self.temp_file
+                instance_id, # ID.
+                ','.join([ob.name for ob in objects])
             ],
             shell=False)
 
-        # Deselect.
-        ob.select_set(False)
-        ob.hide_set(True)
 
-        self.iter_index += 1
+    def export_objects(self, context):
+        print("[Operator] Export Objects to fracture.")
+        for idx, objects in enumerate(self.instance_objects):
+            print("[Client-%i] Initializing..." % idx)
 
-        print("[Server] Starting Up new instance { %i } for object { %s }" % (self.iter_index, ob.name))
+            output_path: str = path.join(TMP_DIR, 'coppybuffer' + str(idx) + '.blend')
+            bpy.data.libraries.write(output_path, set(objects))
+            
+            for ob in objects:
+                print("\t%i. %s" % (idx, ob.name))
+                ob.select_set(False)
+                ob.hide_set(True)
 
-        #sleep(.1)
+            self.start_instance(objects, str(idx))
+
+            try:
+                client, address = self.server.new_connection()
+            except Exception as e:
+                print(e)
+                return None
+            print('[Server] Connected to: ' + address[0] + ':' + str(address[1]))
+            start_new_thread(self.client_handler, (client, ))
