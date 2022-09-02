@@ -16,7 +16,7 @@ bl_info = {
     "author" : "JF racture",
     "description" : "Fast Cell Fracture",
     "blender" : (3, 2, 0),
-    "version" : (0, 1, 0),
+    "version" : (0, 2, 0),
     "location" : "",
     "warning" : "",
     "category" : "Generic"
