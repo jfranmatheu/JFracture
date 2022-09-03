@@ -1,7 +1,6 @@
 import json
 import struct
 from tempfile import gettempdir
-from time import sleep
 from typing import List, Set, Union
 import bpy
 from bpy import context
@@ -78,15 +77,8 @@ with open(SETTINGS_PATH, 'r') as json_file:
 with bpy.data.libraries.load(SRC_PATH) as (data_from, data_to):
     data_to.objects = data_from.objects
 to_export_objects: List[Object] = []
-# b3d_data_path = SRC_PATH + "\\Object\\"
+
 for ob_name in object_names:
-    '''
-    bpy.ops.wm.append(
-        filepath=(b3d_data_path + ob_name),
-        directory=b3d_data_path,
-        filename=ob_name
-    )
-    '''
     ob = bpy.data.objects[ob_name]
     to_export_objects.append(ob)
     context.scene.collection.objects.link(ob)
@@ -123,45 +115,8 @@ def send_signal(client: socket.SocketType, signal: SocketSignal) -> None:
     client.sendall(packed_data)
 
 
-def create_collection(context, name: str) -> Collection:
-
-    def get_layer_coll(layer_coll, collection):
-        if (layer_coll.collection == collection):
-            return layer_coll
-        for layer in layer_coll.children:
-            layer_coll = get_layer_coll(layer, collection)
-            if layer_coll:
-                return layer_coll
-        return None
-
-    # Create collection for object.
-    coll_name: str = name # + '_low'
-    collection = bpy.data.collections.new(coll_name)
-
-    # Link new collection top scene collection.
-    # BUG. RuntimeError: Error: Collection 'Whathever' already in collection 'Scene Collection'
-    # context.scene.collection.children.link(collection)
-
-    # Get layer collection from new collection.
-    # Set as active.
-    #act_layer_coll = context.view_layer.layer_collection
-    #target_layer_coll = get_layer_coll(act_layer_coll, collection)
-    #context.view_layer.active_layer_collection = target_layer_coll
-
-    return collection
-
-
 # FRACTURE PROCESS.
-def fracture(context, to_fracture_ob: Object) -> Collection:
-    # Ensure object is active and selected.
-    context.view_layer.objects.active = to_fracture_ob
-    to_fracture_ob.select_set(True)
-
-    # Create a fracture collection and ensure is active.
-    collection = create_collection(context, to_fracture_ob.name)
-
-    context.scene.collection.children.link(collection)
-
+def fracture(to_fracture_ob: Object, collection: Collection) -> None:
     if len(to_fracture_ob.material_slots) == 0:
         bpy.ops.object.material_slot_add()
         to_fracture_ob.material_slots[0].material = bpy.data.materials.new('Mat__' + to_fracture_ob.name)
@@ -187,14 +142,6 @@ def fracture(context, to_fracture_ob: Object) -> Collection:
         collection_name=collection.name
     )
 
-    # Avoid original object to be selected nor active.
-    to_fracture_ob.select_set(False)
-    context.view_layer.objects.active = context.selected_objects[-1]
-
-    context.scene.collection.children.unlink(collection)
-
-    return collection # Output collection.
-
 
 # LOOP.
 with context.temp_override(**override_ctx), socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
@@ -204,7 +151,24 @@ with context.temp_override(**override_ctx), socket.socket(socket.AF_INET, socket
     output_collections: Set[Collection] = set()
     for ob in to_export_objects:
         print("[Client-%i] Fracturing Object... %s" % (instance_uid, ob.name))
-        output_collections.add(fracture(context, ob))
+        # Ensure object is active and selected.
+        context.view_layer.objects.active = ob
+        ob.select_set(True)
+
+        # Create a fracture collection and ensure is active.
+        collection = bpy.data.collections.new(ob.name)
+        context.scene.collection.children.link(collection)
+
+        # Do fracture.
+        fracture(ob, collection)
+
+        # Avoid original object to be selected nor active.
+        ob.select_set(False)
+        context.view_layer.objects.active = context.selected_objects[-1]
+
+        context.scene.collection.children.unlink(collection)
+
+        output_collections.add(collection)
 
     bpy.data.libraries.write(DST_PATH, output_collections)
 
