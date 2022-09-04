@@ -22,19 +22,6 @@ bl_info = {
     "category" : "Generic"
 }
 
-
-try:
-    import psutil
-except ImportError as e:
-    import sys
-    import bpy
-    blender_version = bpy.app.version
-    if blender_version[0] == 3 and blender_version[1] >= 1:
-        from .lib.py310 import psutil
-    else:
-        from .lib.py39 import psutil
-    sys.modules['psutil'] = psutil
-
 def register():
     from bpy.utils import register_class
     from .operator import JFRACTURE_OT_cell_fracture
