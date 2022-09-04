@@ -1,4 +1,6 @@
 import json
+from math import ceil
+import multiprocessing
 from socket import SocketType
 import subprocess
 from time import sleep, time
@@ -52,7 +54,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
     def init(self, context) -> None:
         self.start_time = time()
-        self.timer = None
 
         # Write cf props to settings json.
         data = {}
@@ -61,15 +62,30 @@ class JFRACTURE_OT_cell_fracture(Operator):
             json_file.write(json_string)
 
         # Deselect objects.
+        small_fracture_objects: List[Object] = []
+        bif_fracture_object_count: int = 0
+        fracture_count: int = 0
+        max_fractures_per_instance: int = 1000
         for ob in self.objects:
             ob.select_set(False)
             # Find aprox number of particles/cells.
-            ob['cell_count'] = get_cell_count(ob)
+            ob['cell_count'] = max(1, get_cell_count(ob))
             ob['fracture_cost'] = len(ob.data.vertices) / ob['cell_count']
+            if ob['cell_count'] < 75:
+                small_fracture_objects.append(ob)
+            elif ob['cell_count'] > max_fractures_per_instance:
+                bif_fracture_object_count += 1
+            else:
+                fracture_count += ob['cell_count']
+
+        # Removed discarded objects.
+        self.objects = [ob for ob in self.objects if ob['cell_count'] >= 75]
+        self.small_fracture_objects = small_fracture_objects
 
         # Get instance count.
         ob_count: int = len(self.objects)
-        instances_count: int = min(CPU_COUNT, ob_count)
+        # Half instance count if we detect that at least 50% objects have less than 500 fractures.
+        instances_count: int = min(CPU_COUNT, ceil(fracture_count/max_fractures_per_instance) + bif_fracture_object_count) # ob_count)
         self.instances_count = instances_count
 
         # Sort objects to find best efficiency.
@@ -85,14 +101,31 @@ class JFRACTURE_OT_cell_fracture(Operator):
         for _i in range(0, instances_count):
             instance_objects.append([])
         for ob in self.objects:
-            print(min(instances_cost))
+            #print(min(instances_cost))
             index_min = instances_cost.index(min(instances_cost))
-            print(index_min)
+            #print(index_min)
             instance_objects[index_min].append(ob)
-            print(ob)
+            #print(ob)
             instances_cost[index_min] += ob['fracture_cost']
         # print(instances_cost)
         # print(instance_objects)
+
+        # Start alternative fracturer for small fractures.
+        if self.small_fracture_objects:
+            small_ob_count: int = len(self.small_fracture_objects)
+            while 1:
+                if small_ob_count >= 100:
+                    small_objects = self.small_fracture_objects[:50]
+                    self.small_fracture_objects = self.small_fracture_objects[50:]
+                else:
+                    small_objects = list(self.small_fracture_objects)
+                    self.small_fracture_objects.clear()
+
+                self.instances_count += 1
+                instance_objects.append(small_objects)
+                small_ob_count = len(self.small_fracture_objects)
+                if small_ob_count == 0:
+                    break
 
         '''
         # OLD. Linear, not smart.
@@ -105,7 +138,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         '''
 
         # Inter-Client properties.
-        self.finished = [False] * instances_count
+        self.finished = [False] * self.instances_count
         self.request_queue = []
 
         # Export objects.
@@ -126,8 +159,10 @@ class JFRACTURE_OT_cell_fracture(Operator):
         self.iter_index: int = 0
 
         # Start server.
-        self.server = JFractureServer(instances_count)
+        self.server = JFractureServer(self.instances_count)
         self.server.start()
+        
+        #self.client_processes = []
 
         # Start clients.
         self.thread = Thread(target=self.start_clients, name="Client Initializer", daemon=True)
@@ -153,7 +188,10 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 print(e)
                 return None
             print('[Server] Connected to: ' + address[0] + ':' + str(address[1]))
-            start_new_thread(self.client_handler, (client, )) #idx
+            #start_new_thread(self.client_handler, (client, )) #idx
+            thread = Thread(target=self.client_handler, args=(client,), daemon=True, name="Client-" + str(self.iter_index))
+            thread.start()
+            #self.client_processes.append(thread)
             self.iter_index += 1
 
 
@@ -183,14 +221,19 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
 
     def finish(self, context: Context) -> None:
-        self.server.stop()
+        if hasattr(self, 'server'):
+            self.server.stop()
+            del self.server
 
-        if self.timer:
+        if hasattr(self, 'timer'):
             context.window_manager.event_timer_remove(self.timer)
-            self.timer = None
+            del self.timer
 
-        if self.thread:
+        if hasattr(self, 'thread'):
             del self.thread
+            
+        #if hasattr(self, 'client_processes'):
+        #    del self.client_processes[:]
 
         tot_time = time() - self.start_time
         time_msg = "Total Time: %.2f" % (tot_time)
@@ -213,6 +256,8 @@ class JFRACTURE_OT_cell_fracture(Operator):
         self.objects = filt_objects
         if not self.init(context):
             return {'CANCELLED'}
+        if self.instances_count == 0:
+            return self.finish(context)
 
         self.timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
@@ -229,6 +274,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
             client_id, request, client = self.request_queue.pop(0)
             if request == SocketSignal.FINISHED:
                 print("[Server] Client-%i just finished!" % client_id)
+                #self.client_processes[client_id].terminate()
                 self.finished[client_id] = True
                 lib_path = path.join(TMP_DIR, 'pastebuffer' + str(client_id) + '.blend')
                 # Load output fracture collections from client output.
@@ -254,6 +300,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         with client:
             while 1:
                 try:
+                    print("Try to Receive..........................................................")
                     data: Tuple[int, int] = self.server.rcv_signal(client)
                     if data is None:
                         continue
@@ -272,3 +319,4 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 except Exception as e:
                     print(e)
                     break
+        print("[Server] Thread finished.")
