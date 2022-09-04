@@ -1,18 +1,13 @@
 import json
 from math import ceil
-import multiprocessing
-from socket import SocketType
 import subprocess
-from time import sleep, time
-from typing import List, Set, Tuple
+from time import time
+from typing import List, Set, Union
 from os import cpu_count, path
-from _thread import start_new_thread
 import bpy
 from bpy.types import Operator, Context, Object
 from tempfile import gettempdir
 from threading import Thread
-
-from .server import JFractureServer, SocketSignal
 
 
 CPU_COUNT = cpu_count()
@@ -127,19 +122,10 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 if small_ob_count == 0:
                     break
 
-        '''
-        # OLD. Linear, not smart.
-        # Resolve objects per instance.
-        if instances_count == ob_count:
-            instance_objects = [[ob] for ob in self.objects]
-        else:
-            # ob_count > instances_count
-            instance_objects: List[List[Object]] = split(self.objects, instances_count)
-        '''
-
         # Inter-Client properties.
         self.finished = [False] * self.instances_count
         self.request_queue = []
+        self.client_processes = []
 
         # Export objects.
         write_lib = bpy.data.libraries.write
@@ -158,12 +144,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
         self.iter_instance_objects = iter(instance_object_names)
         self.iter_index: int = 0
 
-        # Start server.
-        self.server = JFractureServer(self.instances_count)
-        self.server.start()
-        
-        #self.client_processes = []
-
         # Start clients.
         self.thread = Thread(target=self.start_clients, name="Client Initializer", daemon=True)
         self.thread.start()
@@ -172,7 +152,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
 
     def start_clients(self):
-        server: JFractureServer = self.server
         while 1:
             if self.iter_index >= self.instances_count:
                 return None
@@ -182,16 +161,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 print("[Server] Info! No more objects left to fracture.")
                 return None
             self.start_instance(object_names, str(self.iter_index))
-            try:
-                client, address = server.new_connection()
-            except Exception as e:
-                print(e)
-                return None
-            print('[Server] Connected to: ' + address[0] + ':' + str(address[1]))
-            #start_new_thread(self.client_handler, (client, )) #idx
-            thread = Thread(target=self.client_handler, args=(client,), daemon=True, name="Client-" + str(self.iter_index))
-            thread.start()
-            #self.client_processes.append(thread)
             self.iter_index += 1
 
 
@@ -199,7 +168,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         print("[Client-%s] Initializing..." % instance_id)
 
         # Start instance.
-        process = subprocess.Popen(
+        self.client_processes.append(subprocess.Popen(
             [
                 bpy.app.binary_path, # sys.executable,
                 BLEND_PATH,
@@ -208,11 +177,10 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 SCRIPT_PATH,
                 '--', # Blender is silly and stops with this.
                 # Now the arguments...
-                str(self.server.port),
                 instance_id, # ID.
                 ','.join(object_names)
             ],
-            shell=False)
+            shell=False))
 
 
     def error(self, msg: str) -> None:
@@ -221,10 +189,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
 
     def finish(self, context: Context) -> None:
-        if hasattr(self, 'server'):
-            self.server.stop()
-            del self.server
-
         if hasattr(self, 'timer'):
             context.window_manager.event_timer_remove(self.timer)
             del self.timer
@@ -232,8 +196,8 @@ class JFRACTURE_OT_cell_fracture(Operator):
         if hasattr(self, 'thread'):
             del self.thread
             
-        #if hasattr(self, 'client_processes'):
-        #    del self.client_processes[:]
+        if hasattr(self, 'client_processes'):
+            del self.client_processes[:]
 
         tot_time = time() - self.start_time
         time_msg = "Total Time: %.2f" % (tot_time)
@@ -268,13 +232,17 @@ class JFRACTURE_OT_cell_fracture(Operator):
         if not event.type.startswith('TIMER'):
             return {'RUNNING_MODAL'}
 
-        # Workaround to safely resolve the client requests without conflicts between
-        # the different threads that hold the connections with the clients.
-        while self.request_queue != []:
-            client_id, request, client = self.request_queue.pop(0)
-            if request == SocketSignal.FINISHED:
+        finished: List[int] = []
+        for client_id, process in enumerate(self.client_processes):
+            if process is None:
+                continue
+            ret: Union[int, None] = process.poll()
+            # print(process, ret)
+            if ret is None:
+                continue
+            if ret == 0:
                 print("[Server] Client-%i just finished!" % client_id)
-                #self.client_processes[client_id].terminate()
+                print(self.client_processes[client_id])
                 self.finished[client_id] = True
                 lib_path = path.join(TMP_DIR, 'pastebuffer' + str(client_id) + '.blend')
                 # Load output fracture collections from client output.
@@ -284,39 +252,17 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 for collection in data_to.collections:
                     if collection is not None:
                         link_coll(collection)
+                finished.append(client_id)
                 print("[Server] Chunks generated by Client-%i were loaded successfully!" % client_id)
             else:
-                print("Woot!?")
+                print("[Server] ERROR! Client-%i failed!" % client_id)
+
+        if finished:
+            for client_id in finished:
+                self.client_processes[client_id] = None
 
         if all(self.finished):
             print("[Server] DONE!")
             return self.finish(context)
 
         return {'RUNNING_MODAL'}
-
-
-    def client_handler(self, client: SocketType):
-        print('[Server] Started New Thread.')
-        with client:
-            while 1:
-                try:
-                    print("Try to Receive..........................................................")
-                    data: Tuple[int, int] = self.server.rcv_signal(client)
-                    if data is None:
-                        continue
-
-                    instance_id, signal = data
-                    print(f"[Server] Received signal {signal} from instance {instance_id}")
-
-                    # Safe method.
-                    self.request_queue.append((instance_id, signal, client))
-
-                    if signal == SocketSignal.FINISHED:
-                        break
-                    sleep(0.1)
-                    continue
-
-                except Exception as e:
-                    print(e)
-                    break
-        print("[Server] Thread finished.")

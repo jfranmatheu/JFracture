@@ -24,14 +24,12 @@ sys.argv ->
     '--background',
     '--python',
     'C:\\Users\\{user}\\AppData\\Roaming\\Blender Foundation\\Blender\\3.2\\scripts\\addons\\jfracture\\script.py',
-    '64387',
     '0',
     'Cube,Cube.001'
 ]
 '''
 # Python.exe --- sys.argv[0]
 # print("Args:", sys.argv)
-port: int = int(sys.argv[-3]) # Puerto de comunicación con el server.
 instance_uid: int = int(sys.argv[-2]) # Un identificador numérico único.
 object_names: List[str] = sys.argv[-1].split(',') # Lista de nombres de objects.
 
@@ -93,39 +91,9 @@ for ob_name in object_names:
     to_export_objects.append(ob)
     context.scene.collection.objects.link(ob)
     ob.select_set(False)
-    if settings['random_seed']:
-        for ps in ob.particle_systems:
-            ps.seed += random.randint(0, 9999)
-
-
-# CLIENT.
-class SocketSignal:
-    STARTED = 0
-    CONTINUE = 123
-    PROGRESS = 100
-    FINISHED = 1
-    ERROR = 666
-    WAIT = 111
-    REQUEST_SEND = 99
-
-def rcv_signal(client: socket.SocketType) -> Union[int, None]:
-    # Get data from connection.
-    data = client.recv(struct.calcsize('i'))
-
-    # Small delay if no data was found.
-    if data is None:
-        return None
-
-    try:
-        # Get signal.
-        unpacked_data = struct.unpack('i', data)
-        return unpacked_data[0]
-    except:
-        return None
-
-def send_signal(client: socket.SocketType, signal: SocketSignal) -> None:
-    packed_data = struct.pack('i i', instance_uid, signal)
-    client.sendall(packed_data)
+    #if settings['random_seed']:
+    #    for ps in ob.particle_systems:
+    #        ps.seed += random.randint(0, 9999)
 
 
 # FRACTURE UTILS.
@@ -422,9 +390,8 @@ def builtin_fracture(to_fracture_ob: Object, collection: Collection):
 
 
 # LOOP.
-with context.temp_override(**override_ctx), socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-    client.connect(('localhost', port))
-    print("[Client-%i] Connected." % instance_uid, client.getsockname())
+with context.temp_override(**override_ctx):
+    print("[Client-%i] Started." % instance_uid)
 
     output_collections: Set[Collection] = set()
     for ob in to_export_objects:
@@ -460,4 +427,3 @@ with context.temp_override(**override_ctx), socket.socket(socket.AF_INET, socket
 
     # SEND SIGNAL OF FINSIHED.
     print("[Client-%i] Done." % instance_uid)
-    send_signal(client, SocketSignal.FINISHED)
