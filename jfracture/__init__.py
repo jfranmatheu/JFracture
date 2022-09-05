@@ -16,11 +16,31 @@ bl_info = {
     "author" : "JF racture",
     "description" : "Fast Cell Fracture",
     "blender" : (3, 2, 0),
-    "version" : (0, 5, 0),
+    "version" : (0, 6, 0),
     "location" : "",
     "warning" : "",
     "category" : "Generic"
 }
+
+def install_deps():
+    try:
+        import pyhull
+    except ImportError:
+        import subprocess
+        import sys
+        import os
+        
+        python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
+        target = os.path.join(sys.prefix, 'lib', 'site-packages')
+        
+        subprocess.call([python_exe, '-m', 'ensurepip'])
+        subprocess.call([python_exe, '-m', 'pip', 'install', '--upgrade', 'pip'])
+        
+        subprocess.call([python_exe, '-m', 'pip', 'install', '--upgrade', 'pyhull', '-t', target])
+
+print('FINISHED')
+
+install_deps()
 
 def register():
     from bpy.utils import register_class

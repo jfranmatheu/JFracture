@@ -1,4 +1,3 @@
-import json
 from math import ceil
 import subprocess
 from time import time
@@ -53,6 +52,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         # Write cf props to settings json.
         data = {}
         with open(SETTINGS_PATH, 'w') as json_file:
+            import json
             json_string = json.dumps(data)
             json_file.write(json_string)
 
@@ -124,7 +124,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
         # Inter-Client properties.
         self.finished = [False] * self.instances_count
-        self.request_queue = []
         self.client_processes = []
 
         # Export objects.
@@ -237,7 +236,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
             if process is None:
                 continue
             ret: Union[int, None] = process.poll()
-            # print(process, ret)
             if ret is None:
                 continue
             if ret == 0:

@@ -1,14 +1,13 @@
 import json
-import struct
 from tempfile import gettempdir
-from typing import List, Set, Tuple, Union
+from typing import List, Set, Tuple
 import bpy
 from bpy import context
 import sys
-import socket
 from os.path import join, dirname, abspath
 import random
 from math import sqrt
+import numpy as np
 
 from bpy.types import Object, Collection
 from mathutils import Vector
@@ -130,6 +129,39 @@ def points_from_object(depsgraph, src_object: Object, source: Set[str]):
     return points
 
 
+def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
+    #cells_data = []
+
+    #points_sorted_current = [*points]
+    #plane_indices = []
+    #vertices = []
+
+    margin: float = settings['margin']
+
+    # Get planes for convex hull.
+    xa, ya, za = zip(*[v for v in verts])
+
+    xmin, xmax = min(xa) - margin, max(xa) + margin
+    ymin, ymax = min(ya) - margin, max(ya) + margin
+    zmin, zmax = min(za) - margin, max(za) + margin
+    convexPlanes = np.array([
+        [+1.0, 0.0, 0.0, -xmax],
+        [-1.0, 0.0, 0.0, +xmin],
+        [0.0, +1.0, 0.0, -ymax],
+        [0.0, -1.0, 0.0, +ymin],
+        [0.0, 0.0, +1.0, -zmax],
+        [0.0, 0.0, -1.0, +zmin],
+    ], dtype=np.float32)
+
+    from jfracture.cy import jfracture_cy
+    cells_data = jfracture_cy.get_cells(
+        convexPlanes, # .reshape((6, 4))
+        np.array(points, dtype=np.float32),
+        margin)
+
+    return cells_data
+
+
 def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
     cells_data = []
 
@@ -224,13 +256,14 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     verts = [matrix @ v.co for v in mesh.vertices]
     cells = points_as_bmesh_cells(verts, points)
 
-    cell_name = src_object.name + "_cell"
+    cell_name = src_object.name + "_cell_"
 
     # Create the convex hulls.
     cell_objects = []
     new_mesh = bpy.data.meshes.new
     new_object = bpy.data.objects.new
     new_bmesh = bmesh.new
+    i: int = 1
     for center_point, cell_points in cells:
         # New bmesh with the calculated cell points.
         bm = new_bmesh()
@@ -253,7 +286,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             bm_face.material_index = 0
 
         # Create NEW MESH from bmesh.
-        mesh_dst = new_mesh(name=cell_name)
+        mesh_dst = new_mesh(name=cell_name+str(i))
         bm.to_mesh(mesh_dst)
         bm.free()
         del bm
@@ -277,7 +310,8 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             slot_dst.material = slot_src.material
 
         cell_objects.append(cell_ob)
-        
+        i += 1
+
     del cells
 
     return cell_objects
