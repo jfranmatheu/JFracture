@@ -403,15 +403,11 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     return cell_objects
 
 
-def cell_fracture_boolean(context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
+def cell_fracture_boolean(context,
+                          collection: Collection,
+                          src_object: Object,
+                          cell_objects: List[Object]) -> List[Object]:
     print("Info! Adding Booleans...")
-=======
-    return cell_objects
-
-
-def cell_fracture_boolean(
-        context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
->>>>>>> 35de7edebf61eaa391911ade7b4f6dd6f30b315e
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
         mod = cell_ob.modifiers.new(name="Boolean", type='BOOLEAN')
