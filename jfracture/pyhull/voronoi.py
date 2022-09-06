@@ -56,7 +56,7 @@ class VoronoiTess(object):
         vertices attributes for the actual coordinates.
     """
 
-    def __init__(self, points, add_bounding_box=False):
+    def __init__(self, points, dim: int = 3, add_bounding_box=False, args: str = 'o Fv'):
         """
         Initializes a VoronoiTess from points.
 
@@ -67,16 +67,13 @@ class VoronoiTess(object):
                 the extremes of each coordinate will be added to the list of
                 points.
         """
-        self.points = list(points)
-        dim = [len(i) for i in self.points]
-        if max(dim) != min(dim):
-            raise ValueError("Input points must all have the same dimension!")
-        self.dim = dim[0]
+        self.points = [*points]
+        self.dim = dim
         if add_bounding_box:
             coord_ranges = zip(np.amin(points, 0), np.amax(points, 0))
             for coord in itertools.product(*coord_ranges):
                 self.points.append(coord)
-        output = qvoronoi("o Fv", self.points)
+        output = qvoronoi(args, self.points)
         output.pop(0)
         nvertices, nregions, i = [int(i) for i in output.pop(0).split()]
         self.vertices = [[float(j) for j in output.pop(0).split()]
@@ -90,4 +87,3 @@ class VoronoiTess(object):
             val = [int(i) for i in line.split()]
             ridges[tuple(val[1:3])] = val[3:]
         self.ridges = ridges
-
