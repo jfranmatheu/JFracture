@@ -56,7 +56,7 @@ class VoronoiTess(object):
         vertices attributes for the actual coordinates.
     """
 
-    def __init__(self, points, add_bounding_box=False):
+    def __init__(self, points, dim: int = 3, add_bounding_box=False, args: str = 'o Fv'):
         """
         Initializes a VoronoiTess from points.
 
@@ -67,11 +67,11 @@ class VoronoiTess(object):
                 the extremes of each coordinate will be added to the list of
                 points.
         """
-        self.points = list(points)
-        dim = [len(i) for i in self.points]
-        if max(dim) != min(dim):
-            raise ValueError("Input points must all have the same dimension!")
-        self.dim = dim[0]
+        self.points = [*points]
+        #dim = [len(i) for i in self.points]
+        #if max(dim) != min(dim):
+        #    raise ValueError("Input points must all have the same dimension!")
+        self.dim = dim # dim[0]
         if add_bounding_box:
             coord_ranges = zip(np.amin(points, 0), np.amax(points, 0))
             for coord in itertools.product(*coord_ranges):

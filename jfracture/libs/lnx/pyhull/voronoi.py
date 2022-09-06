@@ -68,7 +68,10 @@ class VoronoiTess(object):
                 points.
         """
         self.points = [*points]
-        self.dim = dim
+        #dim = [len(i) for i in self.points]
+        #if max(dim) != min(dim):
+        #    raise ValueError("Input points must all have the same dimension!")
+        self.dim = dim # dim[0]
         if add_bounding_box:
             coord_ranges = zip(np.amin(points, 0), np.amax(points, 0))
             for coord in itertools.product(*coord_ranges):
