@@ -29,8 +29,8 @@ sys.argv ->
 '''
 # Python.exe --- sys.argv[0]
 # print("Args:", sys.argv)
-instance_uid: int = int(sys.argv[-2]) # Un identificador numérico único.
-object_names: List[str] = sys.argv[-1].split(',') # Lista de nombres de objects.
+instance_uid: int = int(sys.argv[-2])  # Un identificador numérico único.
+object_names: List[str] = sys.argv[-1].split(',')  # Lista de nombres de objects.
 
 MODULE_DIR = dirname(abspath(__file__))
 SETTINGS_PATH = join(MODULE_DIR, 'settings.json')
@@ -90,7 +90,7 @@ for ob_name in object_names:
     to_export_objects.append(ob)
     context.scene.collection.objects.link(ob)
     ob.select_set(False)
-    #if settings['random_seed']:
+    # if settings['random_seed']:
     #    for ps in ob.particle_systems:
     #        ps.seed += random.randint(0, 9999)
 
@@ -108,6 +108,8 @@ def points_from_object(depsgraph, src_object: Object, source: Set[str]):
         points.extend([p.location.copy()
                        for psys in ob_eval.particle_systems
                        for p in psys.particles])
+        if not points:
+            points_from_verts(src_object)
 
     # geom own
     if 'VERT_OWN' in source:
@@ -155,7 +157,7 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
 
     from jfracture.cy import jfracture_cy
     cells_data = jfracture_cy.get_cells(
-        convexPlanes, # .reshape((6, 4))
+        convexPlanes,  # .reshape((6, 4))
         np.array(points, dtype=np.float32),
         margin)
 
@@ -187,8 +189,8 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
     ]
 
     for point_cell_current in points:
-        planes = [None] * 6 # len(convexPlanes)
-        for j in range(6): # len(convexPlanes)
+        planes = [None] * 6  # len(convexPlanes)
+        for j in range(6):  # len(convexPlanes)
             planes[j] = convexPlanes[j].copy()
             planes[j][3] += planes[j].xyz.dot(point_cell_current)
 
@@ -395,6 +397,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
         i += 1
 
     del cells
+<<<<<<< HEAD
     '''
 
     return cell_objects
@@ -402,6 +405,13 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
 
 def cell_fracture_boolean(context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
     print("Info! Adding Booleans...")
+=======
+    return cell_objects
+
+
+def cell_fracture_boolean(
+        context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
+>>>>>>> 35de7edebf61eaa391911ade7b4f6dd6f30b315e
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
         mod = cell_ob.modifiers.new(name="Boolean", type='BOOLEAN')
@@ -409,16 +419,20 @@ def cell_fracture_boolean(context, collection: Collection, src_object: Object, c
         mod.object = src_object
         mod.operation = 'INTERSECT'
 
-    first_cell_ob = cell_objects[0]
-    add_bool_mod(first_cell_ob)
-    context.view_layer.objects.active = first_cell_ob
-    bpy.ops.object.make_links_data(False, type='MODIFIERS')
+    if cell_objects:
+        first_cell_ob = cell_objects[0]
+        add_bool_mod(first_cell_ob)
+        context.view_layer.objects.active = first_cell_ob
+        bpy.ops.object.make_links_data(False, type='MODIFIERS')
 
-    if settings['apply_boolean']:
-        # TODO: apply boolean to boundary cells.
-        pass
+        if settings['apply_boolean']:
+            # TODO: apply boolean to boundary cells.
+            pass
 
-    return cell_objects
+        return cell_objects
+    else:
+        print('[cell_fracture_boolean]: No Recived Objects!!')
+        return
 
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:

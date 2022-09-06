@@ -13,7 +13,8 @@ __maintainer__ = "Shyue Ping Ong"
 __email__ = "shyuep@gmail.com"
 
 
-import jfracture.pyhull._pyhull as hull
+#import pyhull._pyhull as hull
+import jfracture.libs.lnx.pyhull as hull
 
 
 def qhull_cmd(cmd, options, points):

@@ -45,7 +45,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
     bl_label: str = "Cell Fracture"
     bl_description: str = "Multi-Thread based cell fracture"
 
-
     def init(self, context) -> None:
         self.start_time = time()
 
@@ -80,7 +79,8 @@ class JFRACTURE_OT_cell_fracture(Operator):
         # Get instance count.
         ob_count: int = len(self.objects)
         # Half instance count if we detect that at least 50% objects have less than 500 fractures.
-        instances_count: int = min(CPU_COUNT, ceil(fracture_count/max_fractures_per_instance) + bif_fracture_object_count) # ob_count)
+        instances_count: int = min(CPU_COUNT, ceil(fracture_count / max_fractures_per_instance) +
+                                   bif_fracture_object_count)  # ob_count)
         self.instances_count = instances_count
 
         # Sort objects to find best efficiency.
@@ -96,11 +96,11 @@ class JFRACTURE_OT_cell_fracture(Operator):
         for _i in range(0, instances_count):
             instance_objects.append([])
         for ob in self.objects:
-            #print(min(instances_cost))
+            # print(min(instances_cost))
             index_min = instances_cost.index(min(instances_cost))
-            #print(index_min)
+            # print(index_min)
             instance_objects[index_min].append(ob)
-            #print(ob)
+            # print(ob)
             instances_cost[index_min] += ob['fracture_cost']
         # print(instances_cost)
         # print(instance_objects)
@@ -149,7 +149,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
         return True
 
-
     def start_clients(self):
         while 1:
             if self.iter_index >= self.instances_count:
@@ -162,30 +161,31 @@ class JFRACTURE_OT_cell_fracture(Operator):
             self.start_instance(object_names, str(self.iter_index))
             self.iter_index += 1
 
-
     def start_instance(self, object_names: List[str], instance_id: str) -> None:
         print("[Client-%s] Initializing..." % instance_id)
 
         # Start instance.
-        self.client_processes.append(subprocess.Popen(
+        popen = subprocess.Popen(
             [
-                bpy.app.binary_path, # sys.executable,
+                bpy.app.binary_path,  # sys.executable,
                 BLEND_PATH,
                 '--background',
+                '--debug',
                 '--python',
                 SCRIPT_PATH,
-                '--', # Blender is silly and stops with this.
+                '--',  # Blender is silly and stops with this.
                 # Now the arguments...
-                instance_id, # ID.
+                instance_id,  # ID.
                 ','.join(object_names)
             ],
-            shell=False))
+            shell=False)
 
+        if popen:
+            self.client_processes.append(popen)
 
     def error(self, msg: str) -> None:
         self.report({'ERROR'}, msg)
         return {'CANCELLED'}
-
 
     def finish(self, context: Context) -> None:
         if hasattr(self, 'timer'):
@@ -194,7 +194,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
         if hasattr(self, 'thread'):
             del self.thread
-            
+
         if hasattr(self, 'client_processes'):
             del self.client_processes[:]
 
@@ -204,7 +204,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
         print(time_msg)
         return {'FINISHED'}
 
-
     def execute(self, context: Context) -> Set[str]:
         if CPU_COUNT == 0:
             return self.error("No CPU! Please, buy new computer")
@@ -212,7 +211,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         if len(context.selected_objects) == 0:
             return self.error("No Selected Objects!")
 
-        filt_objects: List[Object] = [ob for ob in context.selected_objects if ob.type=='MESH' and ob.visible_get()]
+        filt_objects: List[Object] = [ob for ob in context.selected_objects if ob.type == 'MESH' and ob.visible_get()]
         if not filt_objects:
             return self.error("No Selected MESH Objects!")
 
@@ -225,7 +224,6 @@ class JFRACTURE_OT_cell_fracture(Operator):
         self.timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
-
 
     def modal(self, context: Context, event) -> Set[str]:
         if not event.type.startswith('TIMER'):
@@ -244,14 +242,17 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 self.finished[client_id] = True
                 lib_path = path.join(TMP_DIR, 'pastebuffer' + str(client_id) + '.blend')
                 # Load output fracture collections from client output.
-                with bpy.data.libraries.load(lib_path) as (data_from, data_to):
-                    data_to.collections = data_from.collections
-                link_coll = context.scene.collection.children.link
-                for collection in data_to.collections:
-                    if collection is not None:
-                        link_coll(collection)
-                finished.append(client_id)
-                print("[Server] Chunks generated by Client-%i were loaded successfully!" % client_id)
+                if path.isfile(lib_path):
+                    with bpy.data.libraries.load(lib_path) as (data_from, data_to):
+                        data_to.collections = data_from.collections
+                    link_coll = context.scene.collection.children.link
+                    for collection in data_to.collections:
+                        if collection is not None:
+                            link_coll(collection)
+                    finished.append(client_id)
+                    print("[Server] Chunks generated by Client-%i were loaded successfully!" % client_id)
+                else:
+                    print(lib_path, 'Dosent exist!')
             else:
                 print("[Server] ERROR! Client-%i failed!" % client_id)
 
