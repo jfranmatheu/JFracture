@@ -12,28 +12,41 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 bl_info = {
-    "name" : "jfracture",
-    "author" : "JF racture",
-    "description" : "Fast Cell Fracture",
-    "blender" : (3, 2, 0),
-    "version" : (0, 6, 0),
-    "location" : "",
-    "warning" : "",
-    "category" : "Generic"
+    "name": "jfracture",
+    "author": "JF racture",
+    "description": "Fast Cell Fracture",
+    "blender": (3, 2, 0),
+    "version": (0, 6, 0),
+    "location": "",
+    "warning": "",
+    "category": "Generic"
 }
+
 
 def install_deps():
     import sys
 
-    from . import pyhull
+    import platform
+    user_os = platform.system()
+
+    if user_os == 'Windows':
+        from .libs.win import pyhull
+    elif user_os == 'Linux':
+        from .libs.lnx import pyhull
+    # elif user_os == 'Darwin':
+    #     from .pyhull.mac import pyhull
+
     sys.modules['pyhull'] = pyhull
 
+
 install_deps()
+
 
 def register():
     from bpy.utils import register_class
     from .operator import JFRACTURE_OT_cell_fracture
     register_class(JFRACTURE_OT_cell_fracture)
+
 
 def unregister():
     from bpy.utils import unregister_class
