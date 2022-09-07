@@ -32,6 +32,8 @@ sys.argv ->
 instance_uid: int = int(sys.argv[-2])  # Un identificador numérico único.
 object_names: List[str] = sys.argv[-1].split(',')  # Lista de nombres de objects.
 
+# inner_material_index = None
+
 MODULE_DIR = dirname(abspath(__file__))
 SETTINGS_PATH = join(MODULE_DIR, 'settings.json')
 TMP_DIR = gettempdir()
@@ -214,15 +216,15 @@ def points_as_bmesh_cells(verts: List[Vector],
             normal = points_sorted_current[j] - point_cell_current
             nlength = normal.length
 
-            if points_scale != (1.0, 1.0, 1.0):
-                points_scale = Vector((points_scale))
+            # if points_scale != (1.0, 1.0, 1.0):
+            #     points_scale = Vector((points_scale))
 
-                normal_alt = normal * points_scale
+            #     normal_alt = normal * points_scale
 
-                scalar = normal_alt.normalized().dot(normal.normalized())
+            #     scalar = normal_alt.normalized().dot(normal.normalized())
 
-                nlength *= scalar
-                normal = normal_alt
+            #     nlength *= scalar
+            #     normal = normal_alt
 
             if nlength > distance_max:
                 break
@@ -287,6 +289,7 @@ def cell_fracture_objects(
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
 
+    # global inner_material_index
     mat_inner_name = 'RBDLab_Inner_mat'
 
     # Get points.
@@ -373,10 +376,10 @@ def cell_fracture_objects(
                 delimit={'NORMAL'}
             )
 
-        inner_material_index = src_object.material_slots.find(mat_inner_name)
+        # inner_material_index = src_object.material_slots.find(mat_inner_name)
         if mat_inner_name in src_object.material_slots:
             for bm_face in bm.faces:
-                bm_face.material_index = inner_material_index
+                bm_face.material_index = src_object.material_slots.find(mat_inner_name)
 
         # Create NEW MESH from bmesh.
         mesh_dst = new_mesh(name=cell_name+str(i))
@@ -395,11 +398,11 @@ def cell_fracture_objects(
         # mesh_ensure_tessellation_customdata: warning! Tessellation uvs or vcol data got out of sync, had to reset!
         # CD_MTFACE: 0 != CD_MLOOPUV: 1 || CD_MCOL: 0 != CD_PROP_BYTE_COLOR: 0
         # for lay_attr in ("vertex_colors", "uv_layers"):
-        lay_attr = "uv_layers"
-        lay_src = getattr(src_mesh, lay_attr)
-        lay_dst = getattr(mesh_dst, lay_attr)
-        for key in lay_src.keys():
-            lay_dst.new(name=key)
+        # lay_attr = "uv_layers"
+        # lay_src = getattr(src_mesh, lay_attr)
+        # lay_dst = getattr(mesh_dst, lay_attr)
+        # for key in lay_src.keys():
+        #     lay_dst.new(name=key)
 
         # Create NEW OBJECT.
         cell_ob = new_object(name=cell_name, object_data=mesh_dst)
@@ -435,10 +438,12 @@ def cell_fracture_boolean(
         mod.object = src_object
         mod.operation = 'INTERSECT'
 
+    for cell_ob in cell_objects:
+        cell_ob.data.polygons.foreach_set("hide", [True] * len(cell_ob.data.polygons))
+
     if cell_objects:
         first_cell_ob = cell_objects[0]
         add_bool_mod(first_cell_ob)
-        # add_decimate_planar(first_cell_ob)
         context.view_layer.objects.active = first_cell_ob
         bpy.ops.object.make_links_data(False, type='MODIFIERS')
 
@@ -454,29 +459,38 @@ def cell_fracture_boolean(
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
 
+    # global inner_material_index
+
+    # depsgraph = bpy.context.evaluated_depsgraph_get()
     mat_inner_name = 'RBDLab_Inner_mat'
 
+    # face_maps:
     for cell_ob in cell_objects:
+        # ob_eval = cell_ob.evaluated_get(depsgraph)
 
-        inner_material_index = cell_ob.material_slots.find(mat_inner_name)
+        if not mat_inner_name in cell_ob.material_slots:
+            continue
 
-        mesh = cell_ob.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
+        # print(cell_ob.name, 'inner_material_index', inner_material_index)
 
-        # face_maps:
-        fm_lay = bm.faces.layers.face_map.verify()
         fm = cell_ob.face_maps.new(name="Interior")
+        fm.add([poly.index for poly in cell_ob.data.polygons if poly.hide])
 
-        inner_material_index = cell_ob.material_slots.find(mat_inner_name)
-        for bm_face in bm.faces:
-            bm_face.hide = False
-            if bm_face.material_index == inner_material_index:
-                bm_face[fm_lay] = fm.index
+        # mesh = cell_ob.data
+        # bm = bmesh.new()
+        # bm.from_mesh(mesh)
 
-        bm.to_mesh(mesh)
-        bm.free()
-        del bm
+        # fm_lay = bm.faces.layers.face_map.verify()
+        # fm = cell_ob.face_maps.new(name="Interior")
+
+        # for bm_face in bm.faces:
+        #     bm_face.hide = False
+
+        #     if bm_face.material_index == inner_material_index:
+        #         bm_face[fm_lay] = fm.index
+
+        # bm.to_mesh(mesh)
+        # bm.free()
 
 
 def fracture(to_fracture_ob: Object, collection: Collection) -> None:
@@ -493,8 +507,7 @@ def fracture(to_fracture_ob: Object, collection: Collection) -> None:
 
     # if settings['apply_boolean'] and (settings['use_interior_vgroup'] or settings['use_sharp_edges']):
     #     cell_fracture_interior_handle(objects)
-
-    cell_fracture_interior_handle(objects)
+    return objects
 
 
 def builtin_fracture(to_fracture_ob: Object, collection: Collection):
@@ -529,7 +542,13 @@ with context.temp_override(**override_ctx):
     print("[Client-%i] Started." % instance_uid)
 
     output_collections: Set[Collection] = set()
+    objects = []
+
     for ob in to_export_objects:
+
+        if ob.type != 'MESH':
+            continue
+
         print("[Client-%i] Fracturing Object... %s" % (instance_uid, ob.name))
         # Ensure object is active and selected.
         context.view_layer.objects.active = ob
@@ -540,7 +559,7 @@ with context.temp_override(**override_ctx):
         context.scene.collection.children.link(collection)
 
         # Do fracture.
-        fracture(ob, collection)
+        objects = fracture(ob, collection)
 
         # Deselect
         # ob.select_set(False)
@@ -552,6 +571,11 @@ with context.temp_override(**override_ctx):
         context.scene.collection.children.unlink(collection)
 
         output_collections.add(collection)
+
+        cell_fracture_interior_handle(objects)
+
+        # for ob in objects:
+        #     ob.data.polygons.foreach_set("hide", [False] * len(ob.data.polygons))
 
     bpy.data.libraries.write(DST_PATH, output_collections)
 
