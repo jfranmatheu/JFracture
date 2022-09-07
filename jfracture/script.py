@@ -131,6 +131,7 @@ def points_from_object(depsgraph, src_object: Object, source: Set[str]):
     return points
 
 
+'''
 def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
     # cells_data = []
 
@@ -163,6 +164,7 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
         margin)
 
     return cells_data
+'''
 
 
 def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
