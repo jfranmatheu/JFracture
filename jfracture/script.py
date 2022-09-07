@@ -169,7 +169,10 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
 
 def points_as_bmesh_cells(verts: List[Vector],
                           points: List[Vector],
-                          points_scale: tuple = (1.0, 1.0, 1.0)) -> List[Tuple[Vector, List[Vector]]]:
+                          points_scale: tuple = (1.0, 1.0, 1.0),
+                          margin_bounds=0.05,
+                          margin=0.0
+                          ) -> List[Tuple[Vector, List[Vector]]]:
 
     if not points:
         return []
@@ -185,9 +188,9 @@ def points_as_bmesh_cells(verts: List[Vector],
     # Get planes for convex hull.
     xa, ya, za = zip(*[v for v in verts])
 
-    xmin, xmax = min(xa) - margin, max(xa) + margin
-    ymin, ymax = min(ya) - margin, max(ya) + margin
-    zmin, zmax = min(za) - margin, max(za) + margin
+    xmin, xmax = min(xa) - margin_bounds, max(xa) + margin_bounds
+    ymin, ymax = min(ya) - margin_bounds, max(ya) + margin_bounds
+    zmin, zmax = min(za) - margin_bounds, max(za) + margin_bounds
     convexPlanes = [
         Vector((+1.0, 0.0, 0.0, -xmax)),
         Vector((-1.0, 0.0, 0.0, +xmin)),
