@@ -45,7 +45,7 @@ def get_cell_count(ob: Object) -> int:
 
 class JFRACTURE_OT_cell_fracture(Operator):
     bl_idname: str = 'jfracture.cell_fracture'
-    bl_label: str = "Cell Fracture"
+    bl_label: str = "JFracture Cell Fracture"
     bl_description: str = "Multi-Thread based cell fracture"
 
     def init(self, context) -> None:
