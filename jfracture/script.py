@@ -261,8 +261,6 @@ def random_vector() -> Vector:
     ))
 
 
-inner_material_index = None
-
 # FRACTURE PROCESS.
 
 
@@ -280,11 +278,15 @@ def add_basic_material(mat_name: str, obj: Object) -> None:
         obj.data.materials.append(mat)
 
 
-def cell_fracture_objects(context, collection: Collection, src_object: Object, clean=True) -> List[Object]:
+def cell_fracture_objects(
+        context,
+        collection: Collection,
+        src_object: Object,
+        clean=True) -> List[Object]:
+
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
 
-    global inner_material_index
     mat_inner_name = 'RBDLab_Inner_mat'
 
     # Get points.
@@ -316,7 +318,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
     mesh = src_mesh
     matrix = src_object.matrix_world.copy()
     verts = [matrix @ v.co for v in mesh.vertices]
-    cells = points_as_bmesh_cells(verts, points)
+    cells = points_as_bmesh_cells(verts, points, margin=settings['margin'])
 
     cell_name = src_object.name + "_cell_"
 
@@ -365,16 +367,15 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
             dissolve_limit(
                 bm,
                 angle_limit=angle,
-                use_dissolve_boundaries=True,
+                # use_dissolve_boundaries=True,
                 verts=bm.verts,
                 # edges=bm.edges,
                 delimit={'NORMAL'}
             )
 
-        if mat_inner_name in src_object.data.materials:
+        inner_material_index = src_object.material_slots.find(mat_inner_name)
+        if mat_inner_name in src_object.material_slots:
             for bm_face in bm.faces:
-                if not inner_material_index:
-                    inner_material_index = src_object.material_slots.find(mat_inner_name)
                 bm_face.material_index = inner_material_index
 
         # Create NEW MESH from bmesh.
@@ -422,13 +423,10 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
 
 
 def cell_fracture_boolean(
-        context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
-
-    def add_decimate_planar(cell_ob: Object):
-        mod = cell_ob.modifiers.new(name="Decimate", type='DECIMATE')
-        mod.decimate_type = 'DISSOLVE'
-        mod.angle_limit = radians(5)
-        mod.delimit = {'NORMAL'}
+        context,
+        src_object: Object,
+        cell_objects: List[Object]
+) -> List[Object]:
 
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
@@ -456,54 +454,23 @@ def cell_fracture_boolean(
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
 
-    global inner_material_index
     mat_inner_name = 'RBDLab_Inner_mat'
 
     for cell_ob in cell_objects:
+
+        inner_material_index = cell_ob.material_slots.find(mat_inner_name)
+
         mesh = cell_ob.data
         bm = bmesh.new()
         bm.from_mesh(mesh)
 
-        # if settings['use_interior_vgroup']:
-        #     for bm_vert in bm.verts:
-        #         bm_vert.tag = True
-        #     for bm_face in bm.faces:
-        #         if not bm_face.hide:
-        #             for bm_vert in bm_face.verts:
-        #                 bm_vert.tag = False
-
-        #     # now add all vgroups
-        #     defvert_lay = bm.verts.layers.deform.verify()
-        #     for bm_vert in bm.verts:
-        #         if bm_vert.tag:
-        #             bm_vert[defvert_lay][0] = 1.0
-
-        #     # add a vgroup
-        #     cell_ob.vertex_groups.new(name="Interior")
-
-        # if settings['use_sharp_edges']:
-        #     for bm_edge in bm.edges:
-        #         if len({bm_face.hide for bm_face in bm_edge.link_faces}) == 2:
-        #             bm_edge.smooth = False
-
-        #     if settings['use_sharp_edges_apply']:
-        #         edges = [edge for edge in bm.edges if edge.smooth is False]
-        #         if edges:
-        #             bm.normal_update()
-        #             bmesh.ops.split_edges(bm, edges=edges)
-
         # face_maps:
-
         fm_lay = bm.faces.layers.face_map.verify()
         fm = cell_ob.face_maps.new(name="Interior")
-        # vertex_group_data = []
 
+        inner_material_index = cell_ob.material_slots.find(mat_inner_name)
         for bm_face in bm.faces:
             bm_face.hide = False
-
-            if not inner_material_index:
-                inner_material_index = cell_ob.material_slots.find(mat_inner_name)
-
             if bm_face.material_index == inner_material_index:
                 bm_face[fm_lay] = fm.index
 
@@ -514,7 +481,7 @@ def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
 
 def fracture(to_fracture_ob: Object, collection: Collection) -> None:
     objects = cell_fracture_objects(context, collection, to_fracture_ob)
-    objects = cell_fracture_boolean(context, collection, to_fracture_ob, objects)
+    objects = cell_fracture_boolean(context, to_fracture_ob, objects)
 
     # Must apply after boolean.
     # if settings['apply_boolean'] and settings['use_recenter']:
