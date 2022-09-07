@@ -22,7 +22,7 @@ sys.argv ->
     'C:\\Users\\{user}\\AppData\\Roaming\\Blender Foundation\\Blender\\3.2\\scripts\\addons\\jfracture\\empty.blend',
     '--background',
     '--python',
-    'C:\\Users\\{user}\\AppData\\Roaming\\Blender Foundation\\Blender\\3.2\\scripts\\addons\\jfracture\\script.py',
+    'C:\\Users\\{user}\\AppData\\Roaming\\Blender Foundation\\Blender\\3.2\\scripts\\addons\\jfracture\\script_pyhull.py',
     '0',
     'Cube,Cube.001'
 ]
@@ -38,8 +38,9 @@ TMP_DIR = gettempdir()
 SRC_PATH = join(TMP_DIR, 'coppybuffer' + str(instance_uid) + '.blend')
 DST_PATH = join(TMP_DIR, 'pastebuffer' + str(instance_uid) + '.blend')
 
-
 # OVERRIDE CONTEXT.
+
+
 def get_view3d_ctx():
     window = context.window_manager.windows[0]
     for area in window.screen.areas:
@@ -240,8 +241,13 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
 
+    cell_name = src_object.name + "_cell_"
+
     # Get points.
     points = points_from_object(depsgraph, src_object, settings['source'])
+    if not points:
+        print('[cell_fracture_objects]: not recived points!')
+        return None
 
     # Clamp points.
     if settings['source_limit'] != 0 and settings['source_limit'] < len(points):
@@ -250,15 +256,104 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
 
     # Avoid duplicated points.
     to_tuple = Vector.to_tuple
-    points = list({to_tuple(p, 4): p for p in points}.values())
+    points = list({to_tuple(p, 4): p for p in points}.values())  # list({to_tuple(p, 4): p for p in points}.values())
 
+    import platform
+    user_os = platform.system()
+
+    if user_os == 'Windows':
+        from jfracture.libs.win.pyhull.voronoi import VoronoiTess
+        from jfracture.libs.win.pyhull.convex_hull import ConvexHull
+
+    elif user_os == 'Linux':
+        from jfracture.libs.lnx.pyhull.voronoi import VoronoiTess
+        from jfracture.libs.lnx.pyhull.convex_hull import ConvexHull
+    # elif user_os == 'Darwin':
+        #from jfracture.libs.mac.pyhull.voronoi import VoronoiTess
+        #from jfracture.libs.mac.pyhull.convex_hull import ConvexHull
+
+    for p in src_object.bound_box:
+        points.insert(0, tuple(p))
+    voro = VoronoiTess(points, dim=3, add_bounding_box=True, args='o Fi')
+    voro_vertices = voro.vertices
+
+    #print("\n\n***** Points:\n", points)
+    #print("\n\n***** Vertices:\n", voro.vertices)
+    #print("\n***** Regions:\n", voro.regions)
+    #print("\n***** Ridges:\n", voro.ridges)
+
+    # cells = [[voro_vertices[idx] for idx in region] for region in voro.regions]
+
+    # hull = ConvexHull(cells)
+
+    bm = bmesh.new()
+    bm_vert_add = bm.verts.new
+    # { bm_vert_add(tuple(co)) for co in cells }
+
+    bm_verts = bm.verts
+    bm_face_add = bm.faces.new
+    # { bm_face_add(tuple(bm_verts[i] for i in indices)) for indices in hull.vertices }
+
+    for region in voro.regions:
+        # Create convex hull from added vertices.
+        new_verts = [bm_vert_add(tuple(voro_vertices[idx])) for idx in region]
+        convex_hull(bm, input=new_verts, use_existing_faces=False)
+        '''
+        #print("• Add Cell...")
+        hull = ConvexHull([voro_vertices[idx] for idx in region])
+        verts = []
+        for simplex in hull.simplices:
+            #print("\t- Add Face...")
+            for co in simplex._coords:
+                #print("\t\t► Add Vert...", co)
+                verts.append(bm_vert_add(tuple(co)))
+            bm_face_add(tuple(verts))
+        '''
+
+    print("Cells added")
+    # bm.normal_update()
+    # bm.calc_loop_triangles()
+
+    # Asign materials to faces.
+    for bm_face in bm.faces:
+        bm_face.material_index = 0
+
+    # Create NEW MESH from bmesh.
+    print("New Mesh")
+    mesh_dst = bpy.data.meshes.new(name=cell_name)  # +str(i))
+    bm.to_mesh(mesh_dst)
+    bm.free()
+    del bm
+
+    # Add materials to new mesh.
+    for mat in src_mesh.materials:
+        mesh_dst.materials.append(mat)
+
+    # Create NEW OBJECT.
+    print("New Object")
+    cell_ob = bpy.data.objects.new(name=cell_name, object_data=mesh_dst)
+    collection.objects.link(cell_ob)
+    #cell_ob.location = center_point
+    cell_ob.select_set(True)
+
+    # Add material slots to new object.
+    for i in range(len(mesh_dst.materials)):
+        slot_src = src_object.material_slots[i]
+        slot_dst = cell_ob.material_slots[i]
+
+        slot_dst.link = slot_src.link
+        slot_dst.material = slot_src.material
+
+    #print("\n****** CELLS:\n", cells)
+    print(cell_ob)
+    return [cell_ob]
+
+    '''
     # Get cell data.
     mesh = src_object.data
     matrix = src_object.matrix_world.copy()
     verts = [matrix @ v.co for v in mesh.vertices]
     cells = points_as_bmesh_cells(verts, points)
-
-    cell_name = src_object.name + "_cell_"
 
     # Create the convex hulls.
     cell_objects = []
@@ -315,11 +410,17 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
         i += 1
 
     del cells
+
     return cell_objects
+    '''
 
 
-def cell_fracture_boolean(
-        context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
+def cell_fracture_boolean(context,
+                          collection: Collection,
+                          src_object: Object,
+                          cell_objects: List[Object]) -> List[Object]:
+    print("Info! Adding Booleans...")
+
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
         mod = cell_ob.modifiers.new(name="Boolean", type='BOOLEAN')
@@ -344,6 +445,7 @@ def cell_fracture_boolean(
 
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
+    print("Info! Handle interior...")
     for cell_ob in cell_objects:
         mesh = cell_ob.data
         bm = bmesh.new()
@@ -387,6 +489,11 @@ def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
 
 def fracture(to_fracture_ob: Object, collection: Collection) -> None:
     objects = cell_fracture_objects(context, collection, to_fracture_ob)
+    print('*****+ objects', objects)
+    if not objects:
+        print('[fracture]: no objects recived!')
+        return
+
     objects = cell_fracture_boolean(context, collection, to_fracture_ob, objects)
 
     # Must apply after boolean.
@@ -434,6 +541,7 @@ with context.temp_override(**override_ctx):
     print("[Client-%i] Started." % instance_uid)
 
     output_collections: Set[Collection] = set()
+
     for ob in to_export_objects:
         print("[Client-%i] Fracturing Object... %s" % (instance_uid, ob.name))
         # Ensure object is active and selected.

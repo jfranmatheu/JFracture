@@ -11,7 +11,10 @@ from threading import Thread
 
 CPU_COUNT = cpu_count()
 MODULE_PATH = path.dirname(path.abspath(__file__))
+
 SCRIPT_PATH = path.join(MODULE_PATH, 'script.py')
+# SCRIPT_PATH = path.join(MODULE_PATH, 'script_pyhull.py')
+
 SETTINGS_PATH = path.join(MODULE_PATH, 'settings.json')
 BLEND_PATH = path.join(MODULE_PATH, 'empty.blend')
 TMP_DIR = gettempdir()
