@@ -438,8 +438,8 @@ def cell_fracture_boolean(
         mod.object = src_object
         mod.operation = 'INTERSECT'
 
-    for cell_ob in cell_objects:
-        cell_ob.data.polygons.foreach_set("hide", [True] * len(cell_ob.data.polygons))
+    # for cell_ob in cell_objects:
+    #     cell_ob.data.polygons.foreach_set("hide", [True] * len(cell_ob.data.polygons))
 
     if cell_objects:
         first_cell_ob = cell_objects[0]
@@ -474,7 +474,7 @@ def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
         # print(cell_ob.name, 'inner_material_index', inner_material_index)
 
         fm = cell_ob.face_maps.new(name="Interior")
-        fm.add([poly.index for poly in cell_ob.data.polygons if poly.hide])
+        fm.add([poly.index for poly in cell_ob.data.polygons if poly.material_index == cell_ob.material_slots.find(mat_inner_name)])
 
         # mesh = cell_ob.data
         # bm = bmesh.new()
