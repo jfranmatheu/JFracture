@@ -356,8 +356,8 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         convex_hull(bm, input=bm.verts, use_existing_faces=True)
 
         if clean:
-            angle = 0.001  # original cell fracture
-            #angle = 0.1
+            angle = 0.001  # or radians(0.057296) value from original cell fracture
+            # angle = 0.1
             bm.normal_update()
             dissolve_limit(
                 bm,
@@ -376,9 +376,8 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
 
         # Create NEW MESH from bmesh.
         mesh_dst = new_mesh(name=cell_name+str(i))
-        bm.to_mesh(mesh_dst)
 
-        mesh_dst.update()
+        bm.to_mesh(mesh_dst)
         bm.clear()
 
         bm.free()
@@ -392,11 +391,11 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         # mesh_ensure_tessellation_customdata: warning! Tessellation uvs or vcol data got out of sync, had to reset!
         # CD_MTFACE: 0 != CD_MLOOPUV: 1 || CD_MCOL: 0 != CD_PROP_BYTE_COLOR: 0
         # for lay_attr in ("vertex_colors", "uv_layers"):
-        # lay_attr = "uv_layers"
-        # lay_src = getattr(src_mesh, lay_attr)
-        # lay_dst = getattr(mesh_dst, lay_attr)
-        # for key in lay_src.keys():
-        #     lay_dst.new(name=key)
+        lay_attr = "uv_layers"
+        lay_src = getattr(src_mesh, lay_attr)
+        lay_dst = getattr(mesh_dst, lay_attr)
+        for key in lay_src.keys():
+            lay_dst.new(name=key)
 
         # Create NEW OBJECT.
         cell_ob = new_object(name=cell_name, object_data=mesh_dst)
@@ -421,16 +420,24 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
 
 def cell_fracture_boolean(
         context, collection: Collection, src_object: Object, cell_objects: List[Object]) -> List[Object]:
+
+    def add_decimate_planar(cell_ob: Object):
+        mod = cell_ob.modifiers.new(name="Decimate", type='DECIMATE')
+        mod.decimate_type = 'DISSOLVE'
+        mod.angle_limit = radians(5)
+        mod.delimit = {'NORMAL'}
+
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
         mod = cell_ob.modifiers.new(name="Boolean", type='BOOLEAN')
-        # mod.solver = 'FAST' # SHIT BOOLEANS.
+        # mod.solver = 'FAST'  # SHIT BOOLEANS.
         mod.object = src_object
         mod.operation = 'INTERSECT'
 
     if cell_objects:
         first_cell_ob = cell_objects[0]
         add_bool_mod(first_cell_ob)
+        # add_decimate_planar(first_cell_ob)
         context.view_layer.objects.active = first_cell_ob
         bpy.ops.object.make_links_data(False, type='MODIFIERS')
 
