@@ -6,14 +6,14 @@ from bpy import context
 import sys
 from os.path import join, dirname, abspath
 import random
-from math import sqrt
+from math import sqrt, radians
 import numpy as np
 
 from bpy.types import Object, Collection
 from mathutils import Vector
 from mathutils.geometry import points_in_planes
 import bmesh
-from bmesh.ops import remove_doubles, convex_hull, dissolve_limit
+from bmesh.ops import remove_doubles, convex_hull, dissolve_limit, dissolve_degenerate
 
 '''
 sys.argv ->
@@ -132,11 +132,11 @@ def points_from_object(depsgraph, src_object: Object, source: Set[str]):
 
 
 def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
-    #cells_data = []
+    # cells_data = []
 
-    #points_sorted_current = [*points]
-    #plane_indices = []
-    #vertices = []
+    # points_sorted_current = [*points]
+    # plane_indices = []
+    # vertices = []
 
     margin: float = settings['margin']
 
@@ -146,6 +146,7 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
     xmin, xmax = min(xa) - margin, max(xa) + margin
     ymin, ymax = min(ya) - margin, max(ya) + margin
     zmin, zmax = min(za) - margin, max(za) + margin
+
     convexPlanes = np.array([
         [+1.0, 0.0, 0.0, -xmax],
         [-1.0, 0.0, 0.0, +xmin],
@@ -289,7 +290,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
     #     points[:] = [p + (random_unit_vector() * (scalar * random())) for p in points]
 
     # Get cell data.
-    mesh = src_object.data
+    mesh = src_mesh
     matrix = src_object.matrix_world.copy()
     verts = [matrix @ v.co for v in mesh.vertices]
     cells = points_as_bmesh_cells(verts, points)
@@ -321,20 +322,31 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         # Small noise
         {bm_vert_add(co+random_vector()) for co in cell_points}
 
-        # Remove possible double vertices.
-        remove_doubles(bm, verts=bm.verts, dist=0.005)
-
-        # Create convex hull from added vertices.
-        convex_hull(bm, input=bm.verts)
-
-        if len(bm.faces) < 3:
+        if len(bm.verts) < 3:
             bm.free()
             del bm
             continue
 
+        dissolve_degenerate(bm, dist=0.005, edges=bm.edges)
+
+        # Remove possible double vertices.
+        remove_doubles(bm, verts=bm.verts, dist=0.005)
+
+        # Create convex hull from added vertices.
+        convex_hull(bm, input=bm.verts, use_existing_faces=True)
+
         if clean:
+            angle = 0.001  # original cell fracture
+            #angle = 0.1
             bm.normal_update()
-            dissolve_limit(bm, verts=bm.verts, angle_limit=0.001)
+            dissolve_limit(
+                bm,
+                angle_limit=angle,
+                use_dissolve_boundaries=True,
+                verts=bm.verts,
+                # edges=bm.edges,
+                delimit={'NORMAL'}
+            )
 
         if mat_inner_name in src_object.data.materials:
             for bm_face in bm.faces:
@@ -342,15 +354,13 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
                     inner_material_index = src_object.material_slots.find(mat_inner_name)
                 bm_face.material_index = inner_material_index
 
-        # Asign materials to faces.
-        # for bm_face in bm.faces:
-        #    bm_face.material_index = 0
-
         # Create NEW MESH from bmesh.
         mesh_dst = new_mesh(name=cell_name+str(i))
         bm.to_mesh(mesh_dst)
+
         mesh_dst.update()
         bm.clear()
+
         bm.free()
         del bm
 
@@ -361,11 +371,12 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         # esto tira esto:
         # mesh_ensure_tessellation_customdata: warning! Tessellation uvs or vcol data got out of sync, had to reset!
         # CD_MTFACE: 0 != CD_MLOOPUV: 1 || CD_MCOL: 0 != CD_PROP_BYTE_COLOR: 0
-        for lay_attr in ("vertex_colors", "uv_layers"):
-            lay_src = getattr(mesh, lay_attr)
-            lay_dst = getattr(mesh_dst, lay_attr)
-            for key in lay_src.keys():
-                lay_dst.new(name=key)
+        # for lay_attr in ("vertex_colors", "uv_layers"):
+        lay_attr = "uv_layers"
+        lay_src = getattr(src_mesh, lay_attr)
+        lay_dst = getattr(mesh_dst, lay_attr)
+        for key in lay_src.keys():
+            lay_dst.new(name=key)
 
         # Create NEW OBJECT.
         cell_ob = new_object(name=cell_name, object_data=mesh_dst)
@@ -477,16 +488,17 @@ def fracture(to_fracture_ob: Object, collection: Collection) -> None:
     objects = cell_fracture_boolean(context, collection, to_fracture_ob, objects)
 
     # Must apply after boolean.
-    if settings['apply_boolean'] and settings['use_recenter']:
-        bpy.ops.object.origin_set(
-            False,
-            {"selected_editable_objects": objects},
-            type='ORIGIN_GEOMETRY',
-            center='MEDIAN',
-        )
+    # if settings['apply_boolean'] and settings['use_recenter']:
+    # if settings['use_recenter']:
+    #     bpy.ops.object.origin_set(
+    #         type='ORIGIN_GEOMETRY',
+    #         center='MEDIAN',
+    #     )
 
-    if settings['apply_boolean'] and (settings['use_interior_vgroup'] or settings['use_sharp_edges']):
-        cell_fracture_interior_handle(objects)
+    # if settings['apply_boolean'] and (settings['use_interior_vgroup'] or settings['use_sharp_edges']):
+    #     cell_fracture_interior_handle(objects)
+
+    cell_fracture_interior_handle(objects)
 
 
 def builtin_fracture(to_fracture_ob: Object, collection: Collection):
