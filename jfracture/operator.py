@@ -47,6 +47,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
     bl_idname: str = 'jfracture.cell_fracture'
     bl_label: str = "JFracture Cell Fracture"
     bl_description: str = "Multi-Thread based cell fracture"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def init(self, context) -> None:
         self.start_time = time()
