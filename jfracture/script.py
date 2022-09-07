@@ -167,7 +167,13 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
 '''
 
 
-def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
+def points_as_bmesh_cells(verts: List[Vector],
+                          points: List[Vector],
+                          points_scale: tuple = (1.0, 1.0, 1.0)) -> List[Tuple[Vector, List[Vector]]]:
+
+    if not points:
+        return []
+
     cells_data = []
 
     points_sorted_current = [*points]
@@ -205,6 +211,16 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
             normal = points_sorted_current[j] - point_cell_current
             nlength = normal.length
 
+            if points_scale != (1.0, 1.0, 1.0):
+                points_scale = Vector((points_scale))
+
+                normal_alt = normal * points_scale
+
+                scalar = normal_alt.normalized().dot(normal.normalized())
+
+                nlength *= scalar
+                normal = normal_alt
+
             if nlength > distance_max:
                 break
 
@@ -213,12 +229,14 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
             plane[3] = (-nlength / 2.0) + margin
             planes.append(plane)
 
-            vertices[:], plane_indices[:] = points_in_planes(planes)
+            # vertices[:], plane_indices[:] = points_in_planes(planes)
+            vertices, plane_indices = points_in_planes(planes)
             if len(vertices) == 0:
                 break
 
             if len(plane_indices) != len(planes):
-                planes[:] = [planes[k] for k in plane_indices]
+                # planes[:] = [planes[k] for k in plane_indices]
+                planes = [planes[k] for k in plane_indices]
 
             distance_max = sqrt(max(v.length_squared for v in vertices)) * 2.0  # sqrt -> make real length
 
@@ -226,7 +244,8 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
             continue
 
         cells_data.append((point_cell_current, [*vertices]))
-        del vertices[:]
+        del vertices
+        del plane_indices
 
     return cells_data
 
@@ -264,7 +283,6 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
 
     global inner_material_index
     mat_inner_name = 'RBDLab_Inner_mat'
-    view_layer = context.view_layer
 
     # Get points.
     points = points_from_object(depsgraph, src_object, settings['source'])
@@ -370,15 +388,15 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         for mat in src_mesh.materials:
             mesh_dst.materials.append(mat)
 
-        # esto tira esto:
+        # esta parte tira este error por eso lo comento:
         # mesh_ensure_tessellation_customdata: warning! Tessellation uvs or vcol data got out of sync, had to reset!
         # CD_MTFACE: 0 != CD_MLOOPUV: 1 || CD_MCOL: 0 != CD_PROP_BYTE_COLOR: 0
         # for lay_attr in ("vertex_colors", "uv_layers"):
-        lay_attr = "uv_layers"
-        lay_src = getattr(src_mesh, lay_attr)
-        lay_dst = getattr(mesh_dst, lay_attr)
-        for key in lay_src.keys():
-            lay_dst.new(name=key)
+        # lay_attr = "uv_layers"
+        # lay_src = getattr(src_mesh, lay_attr)
+        # lay_dst = getattr(mesh_dst, lay_attr)
+        # for key in lay_src.keys():
+        #     lay_dst.new(name=key)
 
         # Create NEW OBJECT.
         cell_ob = new_object(name=cell_name, object_data=mesh_dst)
@@ -387,9 +405,9 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         cell_ob.select_set(True)
 
         # Add material slots to new object.
-        for i in range(len(mesh_dst.materials)):
-            slot_src = src_object.material_slots[i]
-            slot_dst = cell_ob.material_slots[i]
+        for ms_i in range(len(mesh_dst.materials)):
+            slot_src = src_object.material_slots[ms_i]
+            slot_dst = cell_ob.material_slots[ms_i]
 
             slot_dst.link = slot_src.link
             slot_dst.material = slot_src.material
@@ -397,7 +415,6 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object, c
         cell_objects.append(cell_ob)
         i += 1
 
-    view_layer.update()
     del cells
     return cell_objects
 
