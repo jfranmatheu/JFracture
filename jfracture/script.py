@@ -13,7 +13,7 @@ from bpy.types import Object, Collection
 from mathutils import Vector
 from mathutils.geometry import points_in_planes
 import bmesh
-from bmesh.ops import remove_doubles, convex_hull
+from bmesh.ops import remove_doubles, convex_hull, dissolve_limit
 
 '''
 sys.argv ->
@@ -197,6 +197,7 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
         points_sorted_current.sort(key=lambda p: (p - point_cell_current).length_squared)
 
         distance_max = 10000000000.0  # a big value!
+
         for j in range(1, len(points)):
             normal = points_sorted_current[j] - point_cell_current
             nlength = normal.length
@@ -235,13 +236,39 @@ def random_vector() -> Vector:
     ))
 
 
+inner_material_index = None
+
 # FRACTURE PROCESS.
-def cell_fracture_objects(context, collection: Collection, src_object: Object) -> List[Object]:
+
+
+def add_basic_material(mat_name: str, obj: Object) -> None:
+    if mat_name not in bpy.data.materials:
+        mat = bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+    else:
+        mat = bpy.data.materials.get(mat_name)
+
+    if 'Inner_mat' in mat_name:
+        mat[mat_name] = True
+
+    if mat_name not in obj.data.materials:
+        obj.data.materials.append(mat)
+
+
+def cell_fracture_objects(context, collection: Collection, src_object: Object, clean=True) -> List[Object]:
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
 
+    global inner_material_index
+    mat_inner_name = 'RBDLab_Inner_mat'
+    view_layer = context.view_layer
+
     # Get points.
     points = points_from_object(depsgraph, src_object, settings['source'])
+
+    if not points:
+        print("No points found!")
+        return []
 
     # Clamp points.
     if settings['source_limit'] != 0 and settings['source_limit'] < len(points):
@@ -251,6 +278,15 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     # Avoid duplicated points.
     to_tuple = Vector.to_tuple
     points = list({to_tuple(p, 4): p for p in points}.values())
+    del to_tuple
+
+    # boundbox approx of overall scale
+    # if settings['noise'] > 0.0:
+    #     matrix = src_object.matrix_world.copy()
+    #     bb_world = [matrix @ Vector(v) for v in src_object.bound_box]
+    #     scalar = settings['noise'] * ((bb_world[0] - bb_world[6]).length / 2.0)
+    #     from mathutils.noise import random_unit_vector
+    #     points[:] = [p + (random_unit_vector() * (scalar * random())) for p in points]
 
     # Get cell data.
     mesh = src_object.data
@@ -266,10 +302,23 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     new_object = bpy.data.objects.new
     new_bmesh = bmesh.new
     i: int = 1
+
+    # RBDLab Materials
+    mat_outer_name = 'RBDLab_Outer_mat'
+    mat_inner_name = 'RBDLab_Inner_mat'
+
+    if len(src_object.material_slots) == 0:
+        add_basic_material(mat_outer_name, src_object)
+        add_basic_material(mat_inner_name, src_object)
+    if len(src_object.material_slots) >= 1:
+        add_basic_material(mat_inner_name, src_object)
+
     for center_point, cell_points in cells:
         # New bmesh with the calculated cell points.
         bm = new_bmesh()
         bm_vert_add = bm.verts.new
+
+        # Small noise
         {bm_vert_add(co+random_vector()) for co in cell_points}
 
         # Remove possible double vertices.
@@ -283,19 +332,40 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             del bm
             continue
 
+        if clean:
+            bm.normal_update()
+            dissolve_limit(bm, verts=bm.verts, angle_limit=0.001)
+
+        if mat_inner_name in src_object.data.materials:
+            for bm_face in bm.faces:
+                if not inner_material_index:
+                    inner_material_index = src_object.material_slots.find(mat_inner_name)
+                bm_face.material_index = inner_material_index
+
         # Asign materials to faces.
-        for bm_face in bm.faces:
-            bm_face.material_index = 0
+        # for bm_face in bm.faces:
+        #    bm_face.material_index = 0
 
         # Create NEW MESH from bmesh.
         mesh_dst = new_mesh(name=cell_name+str(i))
         bm.to_mesh(mesh_dst)
+        mesh_dst.update()
+        bm.clear()
         bm.free()
         del bm
 
         # Add materials to new mesh.
         for mat in src_mesh.materials:
             mesh_dst.materials.append(mat)
+
+        # esto tira esto:
+        # mesh_ensure_tessellation_customdata: warning! Tessellation uvs or vcol data got out of sync, had to reset!
+        # CD_MTFACE: 0 != CD_MLOOPUV: 1 || CD_MCOL: 0 != CD_PROP_BYTE_COLOR: 0
+        for lay_attr in ("vertex_colors", "uv_layers"):
+            lay_src = getattr(mesh, lay_attr)
+            lay_dst = getattr(mesh_dst, lay_attr)
+            for key in lay_src.keys():
+                lay_dst.new(name=key)
 
         # Create NEW OBJECT.
         cell_ob = new_object(name=cell_name, object_data=mesh_dst)
@@ -314,6 +384,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
         cell_objects.append(cell_ob)
         i += 1
 
+    view_layer.update()
     del cells
     return cell_objects
 
@@ -344,41 +415,57 @@ def cell_fracture_boolean(
 
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
+
+    global inner_material_index
+    mat_inner_name = 'RBDLab_Inner_mat'
+
     for cell_ob in cell_objects:
         mesh = cell_ob.data
         bm = bmesh.new()
         bm.from_mesh(mesh)
 
-        if settings['use_interior_vgroup']:
-            for bm_vert in bm.verts:
-                bm_vert.tag = True
-            for bm_face in bm.faces:
-                if not bm_face.hide:
-                    for bm_vert in bm_face.verts:
-                        bm_vert.tag = False
+        # if settings['use_interior_vgroup']:
+        #     for bm_vert in bm.verts:
+        #         bm_vert.tag = True
+        #     for bm_face in bm.faces:
+        #         if not bm_face.hide:
+        #             for bm_vert in bm_face.verts:
+        #                 bm_vert.tag = False
 
-            # now add all vgroups
-            defvert_lay = bm.verts.layers.deform.verify()
-            for bm_vert in bm.verts:
-                if bm_vert.tag:
-                    bm_vert[defvert_lay][0] = 1.0
+        #     # now add all vgroups
+        #     defvert_lay = bm.verts.layers.deform.verify()
+        #     for bm_vert in bm.verts:
+        #         if bm_vert.tag:
+        #             bm_vert[defvert_lay][0] = 1.0
 
-            # add a vgroup
-            cell_ob.vertex_groups.new(name="Interior")
+        #     # add a vgroup
+        #     cell_ob.vertex_groups.new(name="Interior")
 
-        if settings['use_sharp_edges']:
-            for bm_edge in bm.edges:
-                if len({bm_face.hide for bm_face in bm_edge.link_faces}) == 2:
-                    bm_edge.smooth = False
+        # if settings['use_sharp_edges']:
+        #     for bm_edge in bm.edges:
+        #         if len({bm_face.hide for bm_face in bm_edge.link_faces}) == 2:
+        #             bm_edge.smooth = False
 
-            if settings['use_sharp_edges_apply']:
-                edges = [edge for edge in bm.edges if edge.smooth is False]
-                if edges:
-                    bm.normal_update()
-                    bmesh.ops.split_edges(bm, edges=edges)
+        #     if settings['use_sharp_edges_apply']:
+        #         edges = [edge for edge in bm.edges if edge.smooth is False]
+        #         if edges:
+        #             bm.normal_update()
+        #             bmesh.ops.split_edges(bm, edges=edges)
+
+        # face_maps:
+
+        fm_lay = bm.faces.layers.face_map.verify()
+        fm = cell_ob.face_maps.new(name="Interior")
+        # vertex_group_data = []
 
         for bm_face in bm.faces:
             bm_face.hide = False
+
+            if not inner_material_index:
+                inner_material_index = cell_ob.material_slots.find(mat_inner_name)
+
+            if bm_face.material_index == inner_material_index:
+                bm_face[fm_lay] = fm.index
 
         bm.to_mesh(mesh)
         bm.free()
@@ -443,11 +530,6 @@ with context.temp_override(**override_ctx):
         # Create a fracture collection and ensure is active.
         collection = bpy.data.collections.new(ob.name)
         context.scene.collection.children.link(collection)
-
-        # Add material.
-        if len(ob.material_slots) == 0:
-            bpy.ops.object.material_slot_add(False)
-            ob.material_slots[0].material = bpy.data.materials.new('Mat__' + ob.name)
 
         # Do fracture.
         fracture(ob, collection)
