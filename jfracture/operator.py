@@ -1,7 +1,7 @@
 from math import ceil
 import subprocess
 from time import time
-from typing import List, Set, Union
+from typing import List, Set, Tuple, Union
 from os import cpu_count, path
 import bpy
 from bpy.types import Operator, Context, Object

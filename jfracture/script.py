@@ -10,11 +10,12 @@ from math import sqrt
 import numpy as np
 import platform
 
+from mathutils.bvhtree import BVHTree
 from bpy.types import Object, Collection
-from mathutils import Vector
+from mathutils import Vector, Matrix
 from mathutils.geometry import points_in_planes
 import bmesh
-from bmesh.ops import remove_doubles, convex_hull
+from bmesh.ops import remove_doubles, convex_hull, dissolve_limit
 
 user_os = platform.system()
 
@@ -103,6 +104,8 @@ for ob_name in object_names:
     # if settings['random_seed']:
     #    for ps in ob.particle_systems:
     #        ps.seed += random.randint(0, 9999)
+
+# bpy.ops.object.transform_apply(False, location=False, rotation=False, scale=True)
 
 
 # FRACTURE UTILS.
@@ -238,7 +241,10 @@ def random_vector() -> Vector:
     ))
 
 
-def cell_fracture_objects(context, collection: Collection, src_object: Object) -> List[Object]:
+def cell_fracture_objects(context,
+                          collection: Collection,
+                          src_object: Object,
+                          ori_loc: Vector) -> List[Object]:
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
 
@@ -267,12 +273,28 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     else:
         cells = points_as_bmesh_cells(src_object, points)
 
+    # Get planes for convex hull via bounding box.
+    margin_bounds: float = 0.05
+    xa, ya, za = zip(*[Vector(tuple(v)) @ src_object.matrix_world for v in src_object.bound_box])
+
+    xmin, xmax = min(xa) - margin_bounds, max(xa) + margin_bounds
+    ymin, ymax = min(ya) - margin_bounds, max(ya) + margin_bounds
+    zmin, zmax = min(za) - margin_bounds, max(za) + margin_bounds
+    is_outbounds = lambda co: xmin <= co.x <= xmax and ymin <= co.y <= ymax  and zmin <= co.z <= zmax
 
     # Create the convex hulls.
+    new_bmesh = bmesh.new
+
+    src_bmesh = new_bmesh()
+    copy_src_mesh = src_mesh.copy()
+    src_bmesh.from_mesh(copy_src_mesh)
+    #src_bmesh.transform(src_object.matrix_world)
+    src_BVHtree = BVHTree.FromBMesh(src_bmesh)
+
     cell_objects = []
+    boundary_cells = []
     new_mesh = bpy.data.meshes.new
     new_object = bpy.data.objects.new
-    new_bmesh = bmesh.new
     cell_idx: int = 1
     for center_point, cell_points in cells:
         # New bmesh with the calculated cell points.
@@ -291,35 +313,70 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
         #if hull['geom_unused'] != []: print("\t- Unused:", hull['geom_unused'])
         #if hull['geom_holes'] != []: print("\t- Holes:", hull['geom_holes'])
         if hull["geom_unused"]: #hull["geom_holes"]
-            bmesh.ops.delete(bm, geom=hull["geom_unused"] + hull["geom_interior"], context='VERTS')
+            bmesh.ops.delete(bm, geom=hull["geom_unused"], context='VERTS') # + hull["geom_interior"]
+
+        dissolve_limit(bm, verts=bm.verts, edges=bm.edges, angle_limit=0.0025)
 
         if len(bm.faces) < 3:
             bm.free()
             del bm
             continue
 
+        '''
+        fm = bm.faces.layers.face_map.verify()
+
+        for face in bm.faces:
+            face_idx = face.index
+            map_idx = face[fm]
+        '''
+
+        # Check if mesh intersects with the original mesh.
+        # TODO: if src_object is cuboid, check bounds overlapping instead.
+        # offset cell to be at its real position temporarily.
+        # offset = center_point + src_object.location
+        bm.transform(Matrix.Translation(center_point))  #<<  Add .name on both lines.
+        cell_BVHtree = BVHTree.FromBMesh(bm)
+        inter = src_BVHtree.overlap(cell_BVHtree)
+        cell_is_boundary: bool = inter != []
+        del cell_BVHtree
+        # return it back to its original position.
+        bm.transform(Matrix.Translation(-center_point))
+
         # Asign materials to faces.
-        for bm_face in bm.faces:
-            bm_face.material_index = 0
+        if cell_is_boundary:
+            for bm_face in bm.faces:
+                if all([is_outbounds(v.co) for v in bm_face.verts]):
+                    #cell_has_outer = True
+                    bm_face.tag = True
+                    bm_face.select = True
+                    bm_face.material_index = 1 # Outer
 
         # Create NEW MESH from bmesh.
-        mesh_dst = new_mesh(name=cell_name+str(cell_idx))
-        bm.to_mesh(mesh_dst)
+        cell_mesh = new_mesh(name=cell_name+str(cell_idx))
+        bm.to_mesh(cell_mesh)
         bm.free()
         del bm
 
         # Add materials to new mesh.
         for mat in src_mesh.materials:
-            mesh_dst.materials.append(mat)
+            cell_mesh.materials.append(mat)
+            if not cell_is_boundary: #cell_has_outer:
+                break
+
+        #for lay_attr in ("vertex_colors", "uv_layers"):
+        #    lay_src = getattr(src_mesh, lay_attr)
+        #    lay_dst = getattr(cell_mesh, lay_attr)
+        #    for key in lay_src.keys():
+        #        lay_dst.new(name=key)
 
         # Create NEW OBJECT.
-        cell_ob = new_object(name=cell_name, object_data=mesh_dst)
+        cell_ob = new_object(name=cell_name, object_data=cell_mesh)
         collection.objects.link(cell_ob)
-        cell_ob.location = center_point
+        cell_ob.location = ori_loc + center_point
         cell_ob.select_set(True)
 
         # Add material slots to new object.
-        for i in range(len(mesh_dst.materials)):
+        for i in range(len(cell_mesh.materials)):
             slot_src = src_object.material_slots[i]
             slot_dst = cell_ob.material_slots[i]
 
@@ -327,16 +384,27 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             slot_dst.material = slot_src.material
 
         cell_objects.append(cell_ob)
+        if cell_is_boundary:
+            boundary_cells.append(cell_ob)
         cell_idx += 1
 
+    src_bmesh.free()
+    del src_bmesh
+    del src_BVHtree
     del cells
-    return cell_objects
+
+    #print(boundary_cells)
+    return cell_objects, boundary_cells
 
 
 def cell_fracture_boolean(context,
                           collection: Collection,
                           src_object: Object,
                           cell_objects: List[Object]) -> List[Object]:
+    if not cell_objects:
+        print("No cells to apply booleans!?")
+        return
+
     print("Info! Adding Booleans...")
     def add_bool_mod(cell_ob: Object):
         # TODO: add boolean ONLY to boundary cells.
@@ -344,6 +412,10 @@ def cell_fracture_boolean(context,
         # mod.solver = 'FAST' # SHIT BOOLEANS.
         mod.object = src_object
         mod.operation = 'INTERSECT'
+
+    bpy.ops.object.select_all(False, action='DESELECT')
+    for cell_ob in cell_objects:
+        cell_ob.select_set(True)
 
     first_cell_ob = cell_objects[0]
     add_bool_mod(first_cell_ob)
@@ -357,66 +429,61 @@ def cell_fracture_boolean(context,
     return cell_objects
 
 
-def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
-    print("Info! Handle interior...")
-    for cell_ob in cell_objects:
-        mesh = cell_ob.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-
-        if settings['use_interior_vgroup']:
-            for bm_vert in bm.verts:
-                bm_vert.tag = True
-            for bm_face in bm.faces:
-                if not bm_face.hide:
-                    for bm_vert in bm_face.verts:
-                        bm_vert.tag = False
-
-            # now add all vgroups
-            defvert_lay = bm.verts.layers.deform.verify()
-            for bm_vert in bm.verts:
-                if bm_vert.tag:
-                    bm_vert[defvert_lay][0] = 1.0
-
-            # add a vgroup
-            cell_ob.vertex_groups.new(name="Interior")
-
-        if settings['use_sharp_edges']:
-            for bm_edge in bm.edges:
-                if len({bm_face.hide for bm_face in bm_edge.link_faces}) == 2:
-                    bm_edge.smooth = False
-
-            if settings['use_sharp_edges_apply']:
-                edges = [edge for edge in bm.edges if edge.smooth is False]
-                if edges:
-                    bm.normal_update()
-                    bmesh.ops.split_edges(bm, edges=edges)
-
-        for bm_face in bm.faces:
-            bm_face.hide = False
-
-        bm.to_mesh(mesh)
-        bm.free()
-        del bm
-
-
 def fracture(to_fracture_ob: Object, collection: Collection) -> None:
-    objects = cell_fracture_objects(context, collection, to_fracture_ob)
-    if not objects:
+    loc_offset: Vector = ob.location.copy()
+    #rot_off: tuple = tuple(ob.rotation_euler.copy())
+    ob.location = 0, 0, 0
+    #ob.rotation_euler = 0, 0, 0
+    cells, boundary_cells = cell_fracture_objects(context, collection, to_fracture_ob, loc_offset)#, rot_off)
+    if not cells:
         return
-    objects = cell_fracture_boolean(context, collection, to_fracture_ob, objects)
+    ob.location = loc_offset
+    #ob.rotation_euler = rot_off
+    cell_fracture_boolean(context, collection, to_fracture_ob, boundary_cells)
 
     # Must apply after boolean.
     if settings['apply_boolean'] and settings['use_recenter']:
         bpy.ops.object.origin_set(
             False,
-            {"selected_editable_objects": objects},
+            {"selected_editable_objects": cells},
             type='ORIGIN_GEOMETRY',
             center='MEDIAN',
         )
+    '''
+    for cell_ob_now in cells:
+        #create bmesh objects
+        bm1 = bmesh.new()
+        bm1.from_mesh(cell_ob_now.data)   #<<  Add .name on both lines.
+        bm1.transform(cell_ob_now.matrix_world)   #<<  Add .name on both lines.
 
-    if settings['apply_boolean'] and (settings['use_interior_vgroup'] or settings['use_sharp_edges']):
-        cell_fracture_interior_handle(objects)
+        for cell_ob_next in cells:
+            if cell_ob_now == cell_ob_next:
+                continue
+
+            
+            bm2 = bmesh.new()
+
+            #fill bmesh data from objects
+            
+            bm2.from_mesh(obj_next.data)  #<<  Add .name on both lines.
+
+            #fixed it here:
+            bm1.transform(cell_ob_now.matrix_world)   #<<  Add .name on both lines.
+            bm2.transform(obj_next.matrix_world)  #<<  Add .name on both lines.
+
+            #make BVH tree from BMesh of objects
+            obj_now_BVHtree = BVHTree.FromBMesh(bm1)
+            obj_next_BVHtree = BVHTree.FromBMesh(bm2)           
+
+            #get intersecting pairs
+            inter = obj_now_BVHtree.overlap(obj_next_BVHtree)
+
+            #if list is empty, no objects are touching
+            if inter != []:
+                print(obj_now.name + " and " + obj_next.name + " are touching!")   # <<  Add .name on both lines.
+            else:
+                print(obj_now.name + " and " + obj_next.name + " NOT touching!")  #<<  Add .name on both lines.
+    '''
 
 
 def builtin_fracture(to_fracture_ob: Object, collection: Collection):
@@ -464,13 +531,17 @@ with context.temp_override(**override_ctx):
         # Add material.
         if len(ob.material_slots) == 0:
             bpy.ops.object.material_slot_add(False)
-            ob.material_slots[0].material = bpy.data.materials.new('Mat__' + ob.name)
+            bpy.ops.object.material_slot_add(False)
+            ob.material_slots[1].material = bpy.data.materials.new('Inner__' + ob.name)
+            ob.material_slots[0].material = bpy.data.materials.new('Outer__' + ob.name)
 
         # Do fracture.
+        #print(ob.name, ob.matrix_world)
         if 'CUSTOM_CF' in FRACTURE_METHOD:
             fracture(ob, collection)
         else:
             builtin_fracture(ob, collection)
+        #print(ob.name, ob.matrix_world)
 
         # Deselect
         # ob.select_set(False)
