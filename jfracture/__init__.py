@@ -23,32 +23,25 @@ bl_info = {
 }
 
 
-def install_deps():
-    import sys
-
-    import platform
-    user_os = platform.system()
-
-    if user_os == 'Windows':
-        from .libs.win import pyhull
-    elif user_os == 'Linux':
-        from .libs.lnx import pyhull
-    # elif user_os == 'Darwin':
-    #     from .pyhull.mac import pyhull
-
-    sys.modules['pyhull'] = pyhull
-
-
-install_deps()
-
-
 def register():
     from bpy.utils import register_class
     from .operator import JFRACTURE_OT_cell_fracture
     register_class(JFRACTURE_OT_cell_fracture)
+
+    import bpy
+    if bpy.app.background:
+        return
+
+    # TODO: Register UI, etc.
 
 
 def unregister():
     from bpy.utils import unregister_class
     from .operator import JFRACTURE_OT_cell_fracture
     unregister_class(JFRACTURE_OT_cell_fracture)
+
+    import bpy
+    if bpy.app.background:
+        return
+
+    # TODO: Register UI, etc.

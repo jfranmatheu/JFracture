@@ -45,7 +45,7 @@ SRC_PATH = join(TMP_DIR, 'coppybuffer' + str(instance_uid) + '.blend')
 DST_PATH = join(TMP_DIR, 'pastebuffer' + str(instance_uid) + '.blend')
 
 
-FRACTURE_METHOD = {'PYHULL'} # {'CYTHON', 'CF'} # {'CF'} #
+FRACTURE_METHOD = {'CUSTOM_CF'} # {'CYTHON', 'CUSTOM_CF'} # {'CF'}
 
 
 # OVERRIDE CONTEXT.
@@ -238,115 +238,6 @@ def random_vector() -> Vector:
     ))
 
 
-# FRACTURE PROCESS.
-def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Object) -> List[Object]:
-    depsgraph = context.evaluated_depsgraph_get()
-    src_mesh = src_object.data
-
-    cell_name = src_object.name + "_cell_"
-
-    # Get points.
-    points = points_from_object(depsgraph, src_object, settings['source'])
-    if not points:
-        print("Warn! No points were found.")
-        return None
-
-    # Clamp points.
-    if settings['source_limit'] != 0 and settings['source_limit'] < len(points):
-        random.shuffle(points)
-        points = points[:settings['source_limit']]
-
-    # Avoid duplicated points.
-    to_tuple = Vector.to_tuple
-    points = list({to_tuple(p, 4): p for p in points}.values()) # list({to_tuple(p, 4): p for p in points}.values())
-    
-    # Get BOUNDING  BOX LIMITS.
-    xa, ya, za = zip(*[Vector(tuple(v)) @ src_object.matrix_world for v in src_object.bound_box])
-    margin = settings['margin']
-    xmin, xmax = min(xa) - margin, max(xa) + margin
-    ymin, ymax = min(ya) - margin, max(ya) + margin
-    zmin, zmax = min(za) - margin, max(za) + margin
-    is_inside = lambda co: xmin <= co[0] <= xmax and ymin <= co[1] <= ymax  and zmin <= co[2] <= zmax
-    
-    print(xmin, xmax)
-    print(ymin, ymax)
-    print(zmin, zmax)
-
-    if user_os == 'Windows':
-        from jfracture.libs.win.pyhull.voronoi import VoronoiTess
-    elif user_os == 'Linux':
-        from jfracture.libs.lnx.pyhull.voronoi import VoronoiTess
-
-    for p in src_object.bound_box:
-        points.insert(0, tuple(p))
-    voro = VoronoiTess(points, dim=3, add_bounding_box=True, args='o Fi')
-    voro_vertices = voro.vertices
-
-    bm = bmesh.new()
-    bm_vert_add = bm.verts.new
-
-    bm_verts = bm.verts
-    bm_face_add = bm.faces.new
-
-    for region in voro.regions:
-        if not all([is_inside(voro_vertices[idx]) for idx in region]):
-            print("Skip region")
-            continue
-        # Create convex hull from added vertices.
-        print("New region", region)
-        new_verts = [bm_vert_add(tuple(voro_vertices[idx])) for idx in region]
-        convex_hull(bm, input=new_verts, use_existing_faces=False)
-        '''
-        #print("• Add Cell...")
-        hull = ConvexHull([voro_vertices[idx] for idx in region])
-        verts = []
-        for simplex in hull.simplices:
-            #print("\t- Add Face...")
-            for co in simplex._coords:
-                #print("\t\t► Add Vert...", co)
-                verts.append(bm_vert_add(tuple(co)))
-            bm_face_add(tuple(verts))
-        '''
-
-    print("Cells added")
-    #bm.normal_update()
-    #bm.calc_loop_triangles()
-
-    # Asign materials to faces.
-    for bm_face in bm.faces:
-        bm_face.material_index = 0
-
-    # Create NEW MESH from bmesh.
-    print("New Mesh")
-    mesh_dst = bpy.data.meshes.new(name=cell_name)#+str(i))
-    bm.to_mesh(mesh_dst)
-    bm.free()
-    del bm
-
-    # Add materials to new mesh.
-    for mat in src_mesh.materials:
-        mesh_dst.materials.append(mat)
-
-    # Create NEW OBJECT.
-    print("New Object")
-    cell_ob = bpy.data.objects.new(name=cell_name, object_data=mesh_dst)
-    collection.objects.link(cell_ob)
-    #cell_ob.location = center_point
-    cell_ob.select_set(True)
-
-    # Add material slots to new object.
-    for i in range(len(mesh_dst.materials)):
-        slot_src = src_object.material_slots[i]
-        slot_dst = cell_ob.material_slots[i]
-
-        slot_dst.link = slot_src.link
-        slot_dst.material = slot_src.material
-
-    #print("\n****** CELLS:\n", cells)
-    print(cell_ob)
-    return [cell_ob]
-
-
 def cell_fracture_objects(context, collection: Collection, src_object: Object) -> List[Object]:
     depsgraph = context.evaluated_depsgraph_get()
     src_mesh = src_object.data
@@ -507,13 +398,9 @@ def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
 
 
 def fracture(to_fracture_ob: Object, collection: Collection) -> None:
-    if 'CF' in FRACTURE_METHOD:
-        objects = cell_fracture_objects(context, collection, to_fracture_ob)
-    elif 'PYHULL' in FRACTURE_METHOD:
-        objects = pyhull_cell_fracture_objects(context, collection, to_fracture_ob)
+    objects = cell_fracture_objects(context, collection, to_fracture_ob)
     if not objects:
         return
-    return
     objects = cell_fracture_boolean(context, collection, to_fracture_ob, objects)
 
     # Must apply after boolean.
@@ -577,7 +464,10 @@ with context.temp_override(**override_ctx):
             ob.material_slots[0].material = bpy.data.materials.new('Mat__' + ob.name)
 
         # Do fracture.
-        fracture(ob, collection)
+        if 'CUSTOM_CF' in FRACTURE_METHOD:
+            fracture(ob, collection)
+        else:
+            builtin_fracture(ob, collection)
 
         # Deselect
         # ob.select_set(False)
@@ -594,3 +484,4 @@ with context.temp_override(**override_ctx):
 
     # SEND SIGNAL OF FINSIHED.
     print("[Client-%i] Done." % instance_uid)
+    sys.exit(0)
