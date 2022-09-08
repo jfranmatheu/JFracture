@@ -11,10 +11,7 @@ from threading import Thread
 
 CPU_COUNT = cpu_count()
 MODULE_PATH = path.dirname(path.abspath(__file__))
-
 SCRIPT_PATH = path.join(MODULE_PATH, 'script.py')
-# SCRIPT_PATH = path.join(MODULE_PATH, 'script_pyhull.py')
-
 SETTINGS_PATH = path.join(MODULE_PATH, 'settings.json')
 BLEND_PATH = path.join(MODULE_PATH, 'empty.blend')
 TMP_DIR = gettempdir()
@@ -45,9 +42,8 @@ def get_cell_count(ob: Object) -> int:
 
 class JFRACTURE_OT_cell_fracture(Operator):
     bl_idname: str = 'jfracture.cell_fracture'
-    bl_label: str = "JFracture Cell Fracture"
+    bl_label: str = "Cell Fracture"
     bl_description: str = "Multi-Thread based cell fracture"
-    bl_options = {'REGISTER', 'UNDO'}
 
     def init(self, context) -> None:
         self.start_time = time()
