@@ -261,12 +261,16 @@ def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Ob
     points = list({to_tuple(p, 4): p for p in points}.values()) # list({to_tuple(p, 4): p for p in points}.values())
     
     # Get BOUNDING  BOX LIMITS.
-    xa, ya, za = zip(*[v for v in src_object.bound_box])
+    xa, ya, za = zip(*[Vector(tuple(v)) @ src_object.matrix_world for v in src_object.bound_box])
     margin = settings['margin']
     xmin, xmax = min(xa) - margin, max(xa) + margin
     ymin, ymax = min(ya) - margin, max(ya) + margin
     zmin, zmax = min(za) - margin, max(za) + margin
     is_inside = lambda co: xmin <= co[0] <= xmax and ymin <= co[1] <= ymax  and zmin <= co[2] <= zmax
+    
+    print(xmin, xmax)
+    print(ymin, ymax)
+    print(zmin, zmax)
 
     if user_os == 'Windows':
         from jfracture.libs.win.pyhull.voronoi import VoronoiTess
