@@ -46,6 +46,7 @@ DST_PATH = join(TMP_DIR, 'pastebuffer' + str(instance_uid) + '.blend')
 
 
 FRACTURE_METHOD = {'CUSTOM_CF'} # {'CYTHON', 'CUSTOM_CF'} # {'CF'}
+USE_ONE_BMESH = True
 
 
 # OVERRIDE CONTEXT.
@@ -167,34 +168,33 @@ def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[
     return cells_data
 
 
-def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
+def points_as_bmesh_cells(src_object: Object, points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
     cells_data = []
 
     points_sorted_current = [*points]
     plane_indices = []
     vertices = []
 
-    margin = settings['margin']
+    margin_cells: float  = settings['margin']
+    margin_bounds: float = 0.01
 
-    # Get planes for convex hull.
-    xa, ya, za = zip(*[v for v in verts])
+    # Get planes for convex hull via bounding box.
+    xa, ya, za = zip(*[Vector(tuple(v)) @ src_object.matrix_world for v in src_object.bound_box])
 
-    xmin, xmax = min(xa) - margin, max(xa) + margin
-    ymin, ymax = min(ya) - margin, max(ya) + margin
-    zmin, zmax = min(za) - margin, max(za) + margin
-    convexPlanes = [
-        Vector((+1.0, 0.0, 0.0, -xmax)),
-        Vector((-1.0, 0.0, 0.0, +xmin)),
-        Vector((0.0, +1.0, 0.0, -ymax)),
-        Vector((0.0, -1.0, 0.0, +ymin)),
-        Vector((0.0, 0.0, +1.0, -zmax)),
-        Vector((0.0, 0.0, -1.0, +zmin)),
-    ]
+    xmin, xmax = min(xa) - margin_bounds, max(xa) + margin_bounds
+    ymin, ymax = min(ya) - margin_bounds, max(ya) + margin_bounds
+    zmin, zmax = min(za) - margin_bounds, max(za) + margin_bounds
 
     for point_cell_current in points:
-        planes = [None] * 6  # len(convexPlanes)
-        for j in range(6):  # len(convexPlanes)
-            planes[j] = convexPlanes[j].copy()
+        planes = [
+            Vector((+1.0, 0.0, 0.0, -xmax)),
+            Vector((-1.0, 0.0, 0.0, +xmin)),
+            Vector((0.0, +1.0, 0.0, -ymax)),
+            Vector((0.0, -1.0, 0.0, +ymin)),
+            Vector((0.0, 0.0, +1.0, -zmax)),
+            Vector((0.0, 0.0, -1.0, +zmin)),
+        ]
+        for j in range(6):
             planes[j][3] += planes[j].xyz.dot(point_cell_current)
 
         points_sorted_current.sort(key=lambda p: (p - point_cell_current).length_squared)
@@ -209,7 +209,7 @@ def points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tup
 
             plane = normal.normalized()
             plane.resize_4d()
-            plane[3] = (-nlength / 2.0) + margin
+            plane[3] = (-nlength / 2.0) + margin_cells
             planes.append(plane)
 
             vertices[:], plane_indices[:] = points_in_planes(planes)
@@ -265,7 +265,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     if 'CYTHON' in FRACTURE_METHOD:
         cells = cy_points_as_bmesh_cells(verts, points)
     else:
-        cells = points_as_bmesh_cells(verts, points)
+        cells = points_as_bmesh_cells(src_object, points)
 
 
     # Create the convex hulls.
@@ -273,7 +273,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
     new_mesh = bpy.data.meshes.new
     new_object = bpy.data.objects.new
     new_bmesh = bmesh.new
-    i: int = 1
+    cell_idx: int = 1
     for center_point, cell_points in cells:
         # New bmesh with the calculated cell points.
         bm = new_bmesh()
@@ -284,7 +284,14 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
         remove_doubles(bm, verts=bm.verts, dist=0.005)
 
         # Create convex hull from added vertices.
-        convex_hull(bm, input=bm.verts)
+        hull = convex_hull(bm, input=bm.verts, use_existing_faces=False)
+        #print("* HULL-", cell_idx)
+        #if hull['geom'] != []: print("\t- Geo:", hull['geom'])
+        #if hull['geom_interior'] != []: print("\t- Interior:", hull['geom_interior'])
+        #if hull['geom_unused'] != []: print("\t- Unused:", hull['geom_unused'])
+        #if hull['geom_holes'] != []: print("\t- Holes:", hull['geom_holes'])
+        if hull["geom_unused"]: #hull["geom_holes"]
+            bmesh.ops.delete(bm, geom=hull["geom_unused"] + hull["geom_interior"], context='VERTS')
 
         if len(bm.faces) < 3:
             bm.free()
@@ -296,7 +303,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             bm_face.material_index = 0
 
         # Create NEW MESH from bmesh.
-        mesh_dst = new_mesh(name=cell_name+str(i))
+        mesh_dst = new_mesh(name=cell_name+str(cell_idx))
         bm.to_mesh(mesh_dst)
         bm.free()
         del bm
@@ -320,7 +327,7 @@ def cell_fracture_objects(context, collection: Collection, src_object: Object) -
             slot_dst.material = slot_src.material
 
         cell_objects.append(cell_ob)
-        i += 1
+        cell_idx += 1
 
     del cells
     return cell_objects
@@ -338,20 +345,16 @@ def cell_fracture_boolean(context,
         mod.object = src_object
         mod.operation = 'INTERSECT'
 
-    if cell_objects:
-        first_cell_ob = cell_objects[0]
-        add_bool_mod(first_cell_ob)
-        context.view_layer.objects.active = first_cell_ob
-        bpy.ops.object.make_links_data(False, type='MODIFIERS')
+    first_cell_ob = cell_objects[0]
+    add_bool_mod(first_cell_ob)
+    context.view_layer.objects.active = first_cell_ob
+    bpy.ops.object.make_links_data(False, type='MODIFIERS')
 
-        if settings['apply_boolean']:
-            # TODO: apply boolean to boundary cells.
-            pass
+    if settings['apply_boolean']:
+        # TODO: apply boolean to boundary cells.
+        pass
 
-        return cell_objects
-    else:
-        print('[cell_fracture_boolean]: No Recived Objects!!')
-        return
+    return cell_objects
 
 
 def cell_fracture_interior_handle(cell_objects: List[Object]) -> None:
