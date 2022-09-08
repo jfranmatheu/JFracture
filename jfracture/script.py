@@ -266,7 +266,7 @@ def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Ob
     xmin, xmax = min(xa) - margin, max(xa) + margin
     ymin, ymax = min(ya) - margin, max(ya) + margin
     zmin, zmax = min(za) - margin, max(za) + margin
-    is_inside = lambda co: xmin <= co[0] <= xmax and ymin <= co[10] <= ymax  and zmin <= co[2] <= zmax
+    is_inside = lambda co: xmin <= co[0] <= xmax and ymin <= co[1] <= ymax  and zmin <= co[2] <= zmax
 
     if user_os == 'Windows':
         from jfracture.libs.win.pyhull.voronoi import VoronoiTess
