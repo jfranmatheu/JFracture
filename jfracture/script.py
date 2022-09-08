@@ -8,12 +8,19 @@ from os.path import join, dirname, abspath
 import random
 from math import sqrt
 import numpy as np
+import platform
 
 from bpy.types import Object, Collection
 from mathutils import Vector
 from mathutils.geometry import points_in_planes
 import bmesh
 from bmesh.ops import remove_doubles, convex_hull
+
+user_os = platform.system()
+
+if user_os not in {'Windows', 'linux'}:
+    print("Error! Operative System not supported!")
+    sys.exit()
 
 '''
 sys.argv ->
@@ -27,8 +34,7 @@ sys.argv ->
     'Cube,Cube.001'
 ]
 '''
-# Python.exe --- sys.argv[0]
-# print("Args:", sys.argv)
+
 instance_uid: int = int(sys.argv[-2])  # Un identificador numérico único.
 object_names: List[str] = sys.argv[-1].split(',')  # Lista de nombres de objects.
 
@@ -135,12 +141,6 @@ def points_from_object(depsgraph, src_object: Object, source: Set[str]):
 
 
 def cy_points_as_bmesh_cells(verts: List[Vector], points: List[Vector]) -> List[Tuple[Vector, List[Vector]]]:
-    #cells_data = []
-
-    #points_sorted_current = [*points]
-    #plane_indices = []
-    #vertices = []
-
     margin: float = settings['margin']
 
     # Get planes for convex hull.
@@ -248,6 +248,7 @@ def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Ob
     # Get points.
     points = points_from_object(depsgraph, src_object, settings['source'])
     if not points:
+        print("Warn! No points were found.")
         return None
 
     # Clamp points.
@@ -258,13 +259,17 @@ def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Ob
     # Avoid duplicated points.
     to_tuple = Vector.to_tuple
     points = list({to_tuple(p, 4): p for p in points}.values()) # list({to_tuple(p, 4): p for p in points}.values())
-
-    import platform
-    user_os = platform.system()
+    
+    # Get BOUNDING  BOX LIMITS.
+    xa, ya, za = zip(*[v for v in src_object.bound_box])
+    margin = settings['margin']
+    xmin, xmax = min(xa) - margin, max(xa) + margin
+    ymin, ymax = min(ya) - margin, max(ya) + margin
+    zmin, zmax = min(za) - margin, max(za) + margin
+    is_inside = lambda co: xmin <= co[0] <= xmax and ymin <= co[10] <= ymax  and zmin <= co[2] <= zmax
 
     if user_os == 'Windows':
         from jfracture.libs.win.pyhull.voronoi import VoronoiTess
-
     elif user_os == 'Linux':
         from jfracture.libs.lnx.pyhull.voronoi import VoronoiTess
 
@@ -273,25 +278,18 @@ def pyhull_cell_fracture_objects(context, collection: Collection, src_object: Ob
     voro = VoronoiTess(points, dim=3, add_bounding_box=True, args='o Fi')
     voro_vertices = voro.vertices
 
-    #print("\n\n***** Points:\n", points)
-    #print("\n\n***** Vertices:\n", voro.vertices)
-    #print("\n***** Regions:\n", voro.regions)
-    #print("\n***** Ridges:\n", voro.ridges)
-
-    # cells = [[voro_vertices[idx] for idx in region] for region in voro.regions]
-
-    # hull = ConvexHull(cells)
-
     bm = bmesh.new()
     bm_vert_add = bm.verts.new
-    # { bm_vert_add(tuple(co)) for co in cells }
 
     bm_verts = bm.verts
     bm_face_add = bm.faces.new
-    # { bm_face_add(tuple(bm_verts[i] for i in indices)) for indices in hull.vertices }
 
     for region in voro.regions:
+        if not all([is_inside(voro_vertices[idx]) for idx in region]):
+            print("Skip region")
+            continue
         # Create convex hull from added vertices.
+        print("New region", region)
         new_verts = [bm_vert_add(tuple(voro_vertices[idx])) for idx in region]
         convex_hull(bm, input=new_verts, use_existing_faces=False)
         '''
