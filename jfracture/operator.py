@@ -44,6 +44,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
     bl_idname: str = 'jfracture.cell_fracture'
     bl_label: str = "Cell Fracture"
     bl_description: str = "Multi-Thread based cell fracture"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def init(self, context) -> None:
         self.start_time = time()
@@ -214,6 +215,15 @@ class JFRACTURE_OT_cell_fracture(Operator):
         filt_objects: List[Object] = [ob for ob in context.selected_objects if ob.type == 'MESH' and ob.visible_get()]
         if not filt_objects:
             return self.error("No Selected MESH Objects!")
+
+        bad_transform_objects: Tuple[Object] = tuple(ob for ob in filt_objects if any(
+            [v != 1.0 for v in ob.scale]) or any([v != 0.0 for v in ob.rotation_euler]))
+        if bad_transform_objects:
+            bpy.ops.object.select_all(False, action='DESELECT')
+            {ob.select_set(True) for ob in bad_transform_objects}
+            context.view_layer.objects.active = bad_transform_objects[0]
+            bpy.ops.object.transform_apply(False, location=False, rotation=True, scale=True)
+            del bad_transform_objects
 
         self.objects = filt_objects
         if not self.init(context):
