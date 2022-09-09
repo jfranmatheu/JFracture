@@ -518,8 +518,6 @@ def builtin_fracture(to_fracture_ob: Object, collection: Collection):
 with context.temp_override(**override_ctx):
     print("[Client-%i] Started." % instance_uid)
 
-    print('to_export_objects', to_export_objects)
-
     output_collections: Set[Collection] = set()
     for ob in to_export_objects:
         print("[Client-%i] Fracturing Object... %s" % (instance_uid, ob.name))
