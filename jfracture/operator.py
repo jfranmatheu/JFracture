@@ -5,17 +5,12 @@ from typing import List, Set, Tuple, Union
 from os import cpu_count, path
 import bpy
 from bpy.types import Operator, Context, Object
-from tempfile import gettempdir
 from threading import Thread
+
+from jfracture.path import JFracturePath
 
 
 CPU_COUNT = cpu_count()
-MODULE_PATH = path.dirname(path.abspath(__file__))
-SCRIPT_PATH = path.join(MODULE_PATH, 'script.py')
-SETTINGS_PATH = path.join(MODULE_PATH, 'settings.json')
-BLEND_PATH = path.join(MODULE_PATH, 'empty.blend')
-TMP_DIR = gettempdir()
-COPYBUFFER_PATH = path.join(TMP_DIR, 'coppybuffer.blend')
 
 
 def split(a, n):
@@ -51,7 +46,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
 
         # Write cf props to settings json.
         data = {}
-        with open(SETTINGS_PATH, 'w') as json_file:
+        with open(JFracturePath.SETTINGS_PATH, 'w') as json_file:
             import json
             json_string = json.dumps(data)
             json_file.write(json_string)
@@ -131,7 +126,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
         write_lib = bpy.data.libraries.write
         instance_object_names = []
         for idx, objects in enumerate(instance_objects):
-            output_path: str = path.join(TMP_DIR, 'coppybuffer' + str(idx) + '.blend')
+            output_path: str = JFracturePath.COPY_BUFFER_PATH % str(idx)
             write_lib(output_path, set(objects))
             names = []
             for ob in objects:
@@ -169,11 +164,11 @@ class JFRACTURE_OT_cell_fracture(Operator):
         popen = subprocess.Popen(
             [
                 bpy.app.binary_path,  # sys.executable,
-                BLEND_PATH,
+                JFracturePath.BLEND_PATH,
                 '--background',
                 '--debug',
                 '--python',
-                SCRIPT_PATH,
+                JFracturePath.SCRIPT_PATH,
                 '--',  # Blender is silly and stops with this.
                 # Now the arguments...
                 instance_id,  # ID.
@@ -250,7 +245,7 @@ class JFRACTURE_OT_cell_fracture(Operator):
                 print("[Server] Client-%i just finished!" % client_id)
                 print(self.client_processes[client_id])
                 self.finished[client_id] = True
-                lib_path = path.join(TMP_DIR, 'pastebuffer' + str(client_id) + '.blend')
+                lib_path = JFracturePath.PASTE_BUFFER_PATH % str(client_id)
                 # Load output fracture collections from client output.
                 if path.isfile(lib_path):
                     with bpy.data.libraries.load(lib_path) as (data_from, data_to):

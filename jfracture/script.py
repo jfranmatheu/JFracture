@@ -1,11 +1,8 @@
-from collections import defaultdict
 import json
-from tempfile import gettempdir
 from typing import List, Set, Tuple
 import bpy
 from bpy import context
 import sys
-from os.path import join, dirname, abspath
 import random
 from math import sqrt
 import numpy as np
@@ -16,10 +13,10 @@ from bpy.types import Object, Collection
 from mathutils import Vector, Matrix
 from mathutils.geometry import points_in_planes
 import bmesh
-from bmesh.types import BMFace
 from bmesh.ops import remove_doubles, convex_hull, dissolve_limit
 
-from jfracture.decorators import timer_it
+from jfracture.utils.decorators import timer_it
+from jfracture.path import JFracturePath
 
 user_os = platform.system()
 
@@ -40,14 +37,13 @@ sys.argv ->
 ]
 '''
 
-instance_uid: int = int(sys.argv[-2])  # Un identificador numérico único.
+instance_uid: str = sys.argv[-2]  # Un identificador numérico único.
 object_names: List[str] = sys.argv[-1].split(',')  # Lista de nombres de objects.
 
-MODULE_DIR = dirname(abspath(__file__))
-SETTINGS_PATH = join(MODULE_DIR, 'settings.json')
-TMP_DIR = gettempdir()
-SRC_PATH = join(TMP_DIR, 'coppybuffer' + str(instance_uid) + '.blend')
-DST_PATH = join(TMP_DIR, 'pastebuffer' + str(instance_uid) + '.blend')
+
+SETTINGS_PATH = JFracturePath.SETTINGS_PATH
+SRC_PATH = JFracturePath.COPY_BUFFER_PATH % instance_uid
+DST_PATH = JFracturePath.PASTE_BUFFER_PATH % instance_uid
 
 
 FRACTURE_METHOD = {'CUSTOM_CF'}  # {'CYTHON', 'CUSTOM_CF'} # {'CF'}
@@ -632,11 +628,11 @@ def write_output(collections: Set[Collection]) -> None:
 
 # LOOP.
 with context.temp_override(**override_ctx):
-    print("[Client-%i] Started." % instance_uid)
+    print("[Client-%s] Started." % instance_uid)
 
     output_collections: Set[Collection] = set()
     for ob in to_export_objects:
-        print("[Client-%i] Fracturing Object... %s" % (instance_uid, ob.name))
+        print("[Client-%s] Fracturing Object... %s" % (instance_uid, ob.name))
         # Create a fracture collection and ensure is active.
         collection = bpy.data.collections.new(ob.name)
         context.scene.collection.children.link(collection)
@@ -659,5 +655,5 @@ with context.temp_override(**override_ctx):
     write_output(output_collections)
 
     # SEND SIGNAL OF FINSIHED.
-    print("[Client-%i] Done." % instance_uid)
+    print("[Client-%s] Done." % instance_uid)
     sys.exit(0)
