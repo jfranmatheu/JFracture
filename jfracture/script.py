@@ -81,14 +81,14 @@ settings = {
     'random_seed': True,
     'source': {'PARTICLE_OWN'},
     'source_limit': 1000,
-    'noise': 0.05,
+    # 'noise': 0.05,
     'scale': (1.0, 1.0, 1.0),
     'margin': 0.00001,
     'use_recenter': True,
-    'use_interior_vgroup': True,
-    'use_interior_hide': False,
-    'use_sharp_edges': False,
-    'use_sharp_edges_apply': False,
+    # 'use_interior_vgroup': True,
+    # 'use_interior_hide': False,
+    # 'use_sharp_edges': False,
+    # 'use_sharp_edges_apply': False,
     'apply_boolean': False,
 }
 with open(SETTINGS_PATH, 'r') as json_file:
@@ -188,6 +188,8 @@ def points_as_bmesh_cells(src_object: Object, points: List[Vector]) -> List[Tupl
     margin_cells: float = settings['margin']
     margin_bounds: float = 0.01
 
+    points_scale: Tuple[float] = None if all([v == 1.0 for v in settings['scale']]) else settings['scale']
+
     # Get planes for convex hull via bounding box.
     xa, ya, za = zip(*[Vector(tuple(v)) @ src_object.matrix_world for v in src_object.bound_box])
 
@@ -213,6 +215,19 @@ def points_as_bmesh_cells(src_object: Object, points: List[Vector]) -> List[Tupl
         for j in range(1, len(points)):
             normal = points_sorted_current[j] - point_cell_current
             nlength = normal.length
+
+            if points_scale is not None:
+                normal_alt = normal.copy()
+                normal_alt.x *= points_scale[0]
+                normal_alt.y *= points_scale[1]
+                normal_alt.z *= points_scale[2]
+
+                # rotate plane to new distance
+                # should always be positive!! - but abs incase
+                scalar = normal_alt.normalized().dot(normal.normalized())
+                # assert(scalar >= 0.0)
+                nlength *= scalar
+                normal = normal_alt
 
             if nlength > distance_max:
                 break
@@ -583,18 +598,15 @@ def builtin_fracture(to_fracture_ob: Object, collection: Collection):
         False,
         source=settings['source'],
         source_limit=settings['source_limit'],
-        source_noise=settings['noise'],
+        source_noise=0.0,  # settings['noise'],
         cell_scale=settings['scale'],
         recursion=0,
         recursion_source_limit=8,
         recursion_clamp=250,
         recursion_chance=0.25,
         recursion_chance_select='SIZE_MIN',
-        # use_sharp_edges_apply=use_sharp_edges_apply,
         margin=settings['margin'],
         material_index=len(to_fracture_ob.material_slots)-1,
-        # use_interior_vgroup=1, # al usar debug no hace el split ni los grupos
-        # use_debug_bool=inner_detail,
         use_debug_redraw=False,
         use_debug_bool=True,
         collection_name=collection.name
